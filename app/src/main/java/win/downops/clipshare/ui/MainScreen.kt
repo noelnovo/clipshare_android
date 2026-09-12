@@ -55,6 +55,7 @@ fun MainScreen(
     val appMode by AppState.appMode.collectAsState()
     val connected by AppState.connected.collectAsState()
     val connectedIp by AppState.connectedIp.collectAsState()
+    val transport by AppState.transport.collectAsState()
     val status by AppState.status.collectAsState()
     val serverName by AppState.serverName.collectAsState()
     val serverClientCount by AppState.serverClientCount.collectAsState()
@@ -72,7 +73,7 @@ fun MainScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            StatusCard(running, starting, stopping, connected, status, serverName, serverClientCount, isServer, onToggle)
+            StatusCard(running, starting, stopping, connected, status, serverName, serverClientCount, transport, isServer, onToggle)
         }
         item {
             if (error != null) {
@@ -148,6 +149,7 @@ private fun StatusCard(
     status: String,
     serverName: String?,
     serverClientCount: Int,
+    transport: String?,
     isServer: Boolean,
     onToggle: () -> Unit,
 ) {
@@ -176,7 +178,7 @@ private fun StatusCard(
                         )
                     } else if (serverName != null) {
                         Text(
-                            "Syncing with $serverName",
+                            "Syncing with $serverName${transport?.let { " ($it)" } ?: ""}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

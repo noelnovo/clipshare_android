@@ -18,7 +18,8 @@ an optional accessibility service lets it capture copies made in *other* apps wh
 not in the foreground.
 
 Discovery works automatically over your LAN using mDNS (`_clipshare._tcp`) and UDP beacon
-announcements, so there is normally no IP address to type in.
+announcements, so there is normally no IP address to type in. Wi-Fi Direct can also be enabled for
+direct Android-to-Android sharing when no router is available.
 
 ## Workflows
 
@@ -66,6 +67,7 @@ desktop daemon and several phones can all join the same server.
 - **Auto-discovery** — mDNS (`_clipshare._tcp`) and UDP beacon announcements (port `40404`); the
   announced `tls` flag switches the client to `wss` automatically
 - **Server mode** — a phone can act as the hub for phone-to-phone sync
+- **Wi-Fi Direct** — optional Android-to-Android discovery and sharing without a router
 - **Foreground service** — keeps the connection alive and writes incoming clipboard content in the
   background
 - **Quick Settings tile** — toggle sync from the notification shade

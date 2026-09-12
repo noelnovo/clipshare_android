@@ -44,9 +44,21 @@ import win.downops.clipshare.ui.theme.ClipShareTheme
 
 class MainActivity : ComponentActivity() {
 
+    private var pendingSyncStart = false
+
     private val notifPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { }
+
+    private val wifiPermission = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        if (pendingSyncStart) {
+            val shouldStart = result.values.all { it }
+            pendingSyncStart = false
+            if (shouldStart) AppState.startSync(this)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,6 +78,21 @@ class MainActivity : ComponentActivity() {
                 ClipShareApp()
             }
         }
+    }
+
+    private fun requestWifiDirectPermissions(): Boolean {
+        val permissions = buildList {
+            if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.NEARBY_WIFI_DEVICES)
+            else add(Manifest.permission.ACCESS_FINE_LOCATION)
+        }.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (permissions.isNotEmpty()) {
+            pendingSyncStart = true
+            wifiPermission.launch(permissions.toTypedArray())
+            return false
+        }
+        return true
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -137,7 +164,12 @@ class MainActivity : ComponentActivity() {
                     }
                 },
                 onToggle = {
-                    if (AppState.running.value) AppState.stopSync(context) else AppState.startSync(context)
+                    if (AppState.running.value) {
+                        AppState.stopSync(context)
+                    } else {
+                        val permissionsReady = !Prefs.wifiDirectEnabled(context) || requestWifiDirectPermissions()
+                        if (permissionsReady) AppState.startSync(context)
+                    }
                 },
                 onClearHistory = { AppState.clearHistory(context) },
                 onSettingsBack = {

@@ -76,6 +76,7 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
     var port by rememberSaveable { mutableStateOf(Prefs.serverPort(context).toString()) }
     var token by rememberSaveable { mutableStateOf(Prefs.token(context)) }
     var discovery by rememberSaveable { mutableStateOf(Prefs.discoveryEnabled(context)) }
+    var wifiDirect by rememberSaveable { mutableStateOf(Prefs.wifiDirectEnabled(context)) }
     var beaconPort by rememberSaveable { mutableStateOf(Prefs.discoveryBeaconPort(context).toString()) }
     var mode by rememberSaveable { mutableStateOf(Prefs.connectionMode(context)) }
     var ipVersion by rememberSaveable { mutableStateOf(Prefs.ipVersion(context)) }
@@ -176,6 +177,7 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
         Prefs.setServerBindIpVersion(context, serverBindIpVersion)
         Prefs.setToken(context, token)
         Prefs.setDiscoveryEnabled(context, discovery)
+        Prefs.setWifiDirectEnabled(context, wifiDirect)
         Prefs.setDiscoveryBeaconPort(context, beaconPort.toIntOrNull() ?: Constants.Discovery.DEFAULT_BEACON_PORT)
         Prefs.setTlsEnabled(context, tlsEnabled)
         Prefs.setVerifyHostname(context, verifyHostname)
@@ -467,6 +469,12 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                     checked = logsEnabled,
                     onCheckedChange = { logsEnabled = it },
                     testTag = "enable_logs",
+                )
+                SwitchRow(
+                    title = "Enable Wi-Fi Direct",
+                    subtitle = "Discover and connect to ClipShare devices without a router. Android may request Nearby devices and location access.",
+                    checked = wifiDirect,
+                    onCheckedChange = { wifiDirect = it },
                 )
                 if (logsEnabled) {
                     OutlinedTextField(

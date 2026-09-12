@@ -46,6 +46,9 @@ object AppState {
     private val _connectedIp = MutableStateFlow<String?>(null)
     val connectedIp: StateFlow<String?> = _connectedIp.asStateFlow()
 
+    private val _transport = MutableStateFlow<String?>(null)
+    val transport: StateFlow<String?> = _transport.asStateFlow()
+
     private val _serverClientCount = MutableStateFlow(0)
     val serverClientCount: StateFlow<Int> = _serverClientCount.asStateFlow()
 
@@ -101,6 +104,7 @@ object AppState {
         _connected.value = false
         _serverName.value = null
         _connectedIp.value = null
+        _transport.value = null
         _serverClientCount.value = 0
         Log.i("AppState", "stopSync")
         ctx.stopService(Intent(ctx, SyncService::class.java))
@@ -125,6 +129,7 @@ object AppState {
         _connected.value = false
         _serverName.value = null
         _connectedIp.value = null
+        _transport.value = null
         _serverClientCount.value = 0
         _status.value = "Stopped"
         Log.i("AppState", "service stopped")
@@ -142,10 +147,11 @@ object AppState {
         Log.i("AppState", "searching")
     }
 
-    fun onConnected(name: String, host: String) {
+    fun onConnected(name: String, host: String, transport: String? = null) {
         _connected.value = true
         _serverName.value = name
         _connectedIp.value = host
+        _transport.value = transport
         _status.value = "Connected to $name"
         _lastError.value = null
         Log.i("AppState", "connected to $name at $host")
@@ -154,6 +160,7 @@ object AppState {
     fun onDisconnected(reason: String?) {
         _connected.value = false
         _serverName.value = null
+        _transport.value = null
         _status.value = if (reason.isNullOrBlank()) "Disconnected" else "Disconnected: $reason"
         Log.i("AppState", "disconnected: ${reason ?: "unknown"}")
     }
@@ -252,6 +259,7 @@ object AppState {
         _status.value = "Stopped"
         _serverName.value = null
         _connectedIp.value = null
+        _transport.value = null
         _serverClientCount.value = 0
         _history.value = emptyList()
         _lastError.value = null

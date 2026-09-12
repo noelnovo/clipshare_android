@@ -19,6 +19,13 @@ Devices advertise themselves and are discovered over your LAN using two mechanis
 | UDP beacons | broadcast to `255.255.255.255:40404` every ~1 s |
 | Server listen port | `40403` (`ws://<host>:40403/ws`) |
 
+When **Wi-Fi Direct** is enabled in Settings, the app also uses Android's
+Wi-Fi P2P service discovery. This creates a direct WPA2-protected link between
+ClipShare devices without requiring a router. Clipboard data still uses the
+same WebSocket endpoint and protocol after the P2P group is formed. Android may
+request Nearby devices permission (and location permission/location services on
+older Android versions). LAN discovery remains available as a fallback.
+
 Discovery is on by default, so in most cases there is nothing to configure: a client shows servers
 under **Devices** on the home screen and you tap one to connect. The beacon advertises the server's
 port and whether it uses TLS; the client switches to `wss` automatically when the server announces

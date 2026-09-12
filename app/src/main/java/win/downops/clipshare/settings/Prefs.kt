@@ -48,6 +48,7 @@ object Prefs {
     private const val KEY_TRUSTED_CAS = "trusted_cas"
     private const val KEY_VERIFY_HOSTNAME = "verify_hostname"
     private const val KEY_LOGS_ENABLED = "logs_enabled"
+    private const val KEY_WIFI_DIRECT = "wifi_direct_enabled"
 
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -113,6 +114,8 @@ object Prefs {
     fun verifyHostname(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_VERIFY_HOSTNAME, false)
 
     fun logsEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_LOGS_ENABLED, false)
+
+    fun wifiDirectEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_WIFI_DIRECT, false)
 
     fun whitelist(ctx: Context): List<WhitelistEntry> {
         val raw = prefs(ctx).getString(KEY_WHITELIST, null) ?: return emptyList()
@@ -186,6 +189,9 @@ object Prefs {
 
     fun setLogsEnabled(ctx: Context, value: Boolean) =
         prefs(ctx).edit().putBoolean(KEY_LOGS_ENABLED, value).apply()
+
+    fun setWifiDirectEnabled(ctx: Context, value: Boolean) =
+        prefs(ctx).edit().putBoolean(KEY_WIFI_DIRECT, value).apply()
 
     fun setWhitelist(ctx: Context, entries: List<WhitelistEntry>) {
         prefs(ctx).edit().putString(

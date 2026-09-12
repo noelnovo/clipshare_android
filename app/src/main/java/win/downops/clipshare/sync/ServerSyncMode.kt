@@ -3,6 +3,7 @@ package win.downops.clipshare.sync
 import android.content.Context
 import win.downops.clipshare.certs.ServerCertManager
 import win.downops.clipshare.discover.DiscoveryAdvertiser
+import win.downops.clipshare.discover.WifiDirectManager
 import win.downops.clipshare.logs.Log
 import win.downops.clipshare.settings.Prefs
 import win.downops.clipshare.state.AppState
@@ -21,6 +22,7 @@ class ServerSyncMode(
 
     private var wsServer: WsServer? = null
     private var advertiser: DiscoveryAdvertiser? = null
+    private var wifiDirect: WifiDirectManager? = null
 
     override fun start() {
         startServerMode()
@@ -31,6 +33,8 @@ class ServerSyncMode(
         wsServer = null
         advertiser?.stop()
         advertiser = null
+        wifiDirect?.stop()
+        wifiDirect = null
     }
 
     private fun startServerMode() {
@@ -96,6 +100,11 @@ class ServerSyncMode(
         val adv = DiscoveryAdvertiser(context, beaconPort)
         advertiser = adv
         adv.start(Prefs.deviceName(context), port, tls)
+        if (Prefs.wifiDirectEnabled(context)) {
+            val p2p = WifiDirectManager(context, { _, _, _, _ -> })
+            wifiDirect = p2p
+            p2p.startServer(Prefs.deviceName(context), port, tls)
+        }
     }
 
     /** Broadcast a just-received clipboard item to every other connected client. */

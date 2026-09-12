@@ -3,6 +3,7 @@ package win.downops.clipshare.sync
 import android.content.Context
 import win.downops.clipshare.certs.CertStore
 import win.downops.clipshare.discover.DiscoveryManager
+import win.downops.clipshare.discover.WifiDirectManager
 import win.downops.clipshare.logs.Log
 import win.downops.clipshare.settings.Prefs
 import win.downops.clipshare.state.AppState
@@ -28,6 +29,7 @@ class ClientSyncMode(
 
     private var ws: WsClient? = null
     private var discovery: DiscoveryManager? = null
+    private var wifiDirect: WifiDirectManager? = null
     private val lock = Object()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -43,6 +45,9 @@ class ClientSyncMode(
 
     @Volatile
     private var currentTls: Boolean = false
+
+    @Volatile
+    private var currentTransport: String = "lan"
 
     @Volatile
     private var whitelistCandidates: List<Pair<String, Int>> = emptyList()
@@ -73,6 +78,8 @@ class ClientSyncMode(
         scope.cancel()
         discovery?.stop()
         discovery = null
+        wifiDirect?.stop()
+        wifiDirect = null
         stopWs()
     }
 
@@ -86,6 +93,13 @@ class ClientSyncMode(
     // ------------------------------------------------------------------
 
     private fun startDiscovery() {
+        if (Prefs.wifiDirectEnabled(context)) {
+            val p2p = WifiDirectManager(context, { name, host, port, tls ->
+                onDeviceFound(name, host, port, tls, "wifi_direct")
+            })
+            wifiDirect = p2p
+            p2p.startClient()
+        }
         if (Prefs.connectionMode(context) == Prefs.MODE_WHITELIST) {
             Log.i("SyncService", "discovery skipped: whitelist mode")
             return
@@ -99,25 +113,25 @@ class ClientSyncMode(
         val ipVersion = Prefs.ipVersion(context)
         val d = DiscoveryManager(context, beaconPort, ipVersion) { name, host, port, tls, _ ->
             Log.i("SyncService", "discovered $name at $host:$port (tls=$tls)")
-            onDeviceFound(name, host, port, tls)
+            onDeviceFound(name, host, port, tls, "lan")
         }
         discovery = d
         d.start()
     }
 
     /** Called from the discovery threads whenever a daemon announces itself. */
-    private fun onDeviceFound(name: String, host: String, port: Int, tls: Boolean) {
+    private fun onDeviceFound(name: String, host: String, port: Int, tls: Boolean, source: String) {
         if (!running) return
         // A filled manual host wins: only fall back to discovery once it is
         // unreachable or not configured.
         if (manualActive) return
-        connectTo(host, port, tls, verifyName = false, persist = false)
+        connectTo(host, port, tls, verifyName = false, persist = false, transport = source)
     }
 
     override fun switchTo(host: String, port: Int, tls: Boolean) {
         // Device taps are ephemeral and never rewrite the manual host field.
         manualActive = false
-        connectTo(host, port, tls, verifyName = false, persist = false)
+        connectTo(host, port, tls, verifyName = false, persist = false, transport = "manual")
     }
 
     // ------------------------------------------------------------------
@@ -151,16 +165,19 @@ class ClientSyncMode(
         tls: Boolean,
         verifyName: Boolean,
         persist: Boolean,
+        transport: String = "lan",
     ) {
         val normalizedHost = HostUtil.normalize(host)
         synchronized(lock) {
-            if (currentHost == normalizedHost && currentPort == port && currentTls == tls && ws != null) {
+            if (currentHost == normalizedHost && currentPort == port && currentTls == tls &&
+                currentTransport == transport && ws != null) {
                 Log.d("SyncService", "already connected/connecting to $host:$port")
                 return
             }
             currentHost = normalizedHost
             currentPort = port
             currentTls = tls
+            currentTransport = transport
             ws?.stop()
             val socket = buildSocket(normalizedHost, port, tls, verifyName)
             ws = socket
@@ -215,7 +232,7 @@ class ClientSyncMode(
                     Log.w("SyncService", "name $name rejected by whitelist")
                     rejectCurrent()
                 } else {
-                    AppState.onConnected(name, host)
+                    AppState.onConnected(name, host, currentTransport)
                     events.updateNotification("Connected to $host")
                 }
             },
