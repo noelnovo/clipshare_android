@@ -8,10 +8,10 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
-import android.net.wifi.p2p.WifiP2pDnsSdServiceInfo
-import android.net.wifi.p2p.WifiP2pDnsSdServiceRequest
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
+import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceInfo
+import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceRequest
 import android.os.Build
 import android.os.Looper
 import androidx.core.content.ContextCompat
@@ -30,7 +30,7 @@ class WifiDirectManager(
     private val manager = context.getSystemService(Context.WIFI_P2P_SERVICE) as WifiP2pManager
     private var channel: WifiP2pManager.Channel? = null
     private var receiver: BroadcastReceiver? = null
-    private var request: WifiP2pManager.DnsSdServiceRequest? = null
+    private var request: WifiP2pDnsSdServiceRequest? = null
     private var running = false
     private var serverMode = false
     private var serviceName = ""
