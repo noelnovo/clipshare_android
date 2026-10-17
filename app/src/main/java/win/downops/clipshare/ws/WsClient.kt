@@ -1,5 +1,6 @@
 package win.downops.clipshare.ws
 
+import android.net.Network
 import win.downops.clipshare.certs.ClientTls
 import win.downops.clipshare.logs.Log
 import win.downops.clipshare.util.Constants
@@ -37,6 +38,7 @@ class WsClient(
     private val onConnectFailed: () -> Unit,
     private val onError: (msg: String) -> Unit,
     private val verifyHostname: Boolean = true,
+    private val network: Network? = null,
 ) {
     private val host: String =
         url.substringAfter("//").substringBefore(":")
@@ -45,6 +47,7 @@ class WsClient(
         .pingInterval(Constants.WebSocket.PING_INTERVAL_MS, TimeUnit.MILLISECONDS)
         .connectTimeout(Constants.WebSocket.CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         .apply {
+            network?.let { socketFactory(it.socketFactory) }
             val t = tls
             if (t != null) {
                 sslSocketFactory(t.sslContext.socketFactory, t.trustManager)

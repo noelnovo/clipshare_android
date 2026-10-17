@@ -48,6 +48,14 @@ class HostUtilTest {
     }
 
     @Test
+    fun detectsCommonWifiDirectSubnets() {
+        assertTrue(HostUtil.isWifiDirectAddress("192.168.49.1"))
+        assertTrue(HostUtil.isWifiDirectAddress("192.168.137.1"))
+        assertFalse(HostUtil.isWifiDirectAddress("192.168.1.10"))
+        assertFalse(HostUtil.isWifiDirectAddress("desktop.local"))
+    }
+
+    @Test
     fun matchesIpVersionFiltersNumericAddresses() {
         assertTrue(HostUtil.matchesIpVersion("192.168.1.5", Prefs.IP_VERSION_IPV4))
         assertFalse(HostUtil.matchesIpVersion("[fe80::1]", Prefs.IP_VERSION_IPV4))

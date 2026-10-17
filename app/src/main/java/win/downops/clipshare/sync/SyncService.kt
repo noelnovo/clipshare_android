@@ -50,7 +50,13 @@ class SyncService : Service() {
             }
         }
 
-        val m = if (Prefs.appMode(this) == Prefs.APP_MODE_SERVER) {
+        val plan = SyncPlan.forContext(this)
+        if (plan.wifiDirectConnectBlocked) {
+            val msg = "Wi-Fi Direct connect needs Client mode; switch the app mode or use Wi-Fi Direct host"
+            Log.w("SyncService", msg)
+            events.updateNotification(msg)
+        }
+        val m = if (plan.runServer) {
             ServerSyncMode(this, events)
         } else {
             ClientSyncMode(this, events)

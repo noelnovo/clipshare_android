@@ -19,6 +19,11 @@ object Prefs {
     const val APP_MODE_CLIENT = "client"
     const val APP_MODE_SERVER = "server"
 
+    /** Wi-Fi Direct role: join a Windows group owner as a P2P client. */
+    const val WIFI_DIRECT_ROLE_CONNECT = "connect"
+    /** Wi-Fi Direct role: create a P2P group and host the server on it. */
+    const val WIFI_DIRECT_ROLE_HOST = "host"
+
     const val IP_VERSION_ANY = "any"
     const val IP_VERSION_IPV4 = "ipv4"
     const val IP_VERSION_IPV6 = "ipv6"
@@ -49,6 +54,9 @@ object Prefs {
     private const val KEY_VERIFY_HOSTNAME = "verify_hostname"
     private const val KEY_LOGS_ENABLED = "logs_enabled"
     private const val KEY_WIFI_DIRECT = "wifi_direct_enabled"
+    private const val KEY_WIFI_DIRECT_PEER_NAME = "wifi_direct_peer_name"
+    private const val KEY_WIFI_DIRECT_ROLE = "wifi_direct_role"
+
 
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -116,6 +124,16 @@ object Prefs {
     fun logsEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_LOGS_ENABLED, false)
 
     fun wifiDirectEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_WIFI_DIRECT, false)
+
+    fun wifiDirectPeerName(ctx: Context): String =
+        prefs(ctx).getString(KEY_WIFI_DIRECT_PEER_NAME, "") ?: ""
+
+    /** Independent of app mode: connect (default) or host a Wi-Fi Direct group. */
+    fun wifiDirectRole(ctx: Context): String {
+        val value = prefs(ctx).getString(KEY_WIFI_DIRECT_ROLE, WIFI_DIRECT_ROLE_CONNECT) ?: WIFI_DIRECT_ROLE_CONNECT
+        return if (value == WIFI_DIRECT_ROLE_HOST) WIFI_DIRECT_ROLE_HOST else WIFI_DIRECT_ROLE_CONNECT
+    }
+
 
     fun whitelist(ctx: Context): List<WhitelistEntry> {
         val raw = prefs(ctx).getString(KEY_WHITELIST, null) ?: return emptyList()
@@ -192,6 +210,15 @@ object Prefs {
 
     fun setWifiDirectEnabled(ctx: Context, value: Boolean) =
         prefs(ctx).edit().putBoolean(KEY_WIFI_DIRECT, value).apply()
+
+    fun setWifiDirectRole(ctx: Context, value: String) =
+        prefs(ctx).edit().putString(
+            KEY_WIFI_DIRECT_ROLE,
+            if (value == WIFI_DIRECT_ROLE_HOST) WIFI_DIRECT_ROLE_HOST else WIFI_DIRECT_ROLE_CONNECT,
+        ).apply()
+
+    fun setWifiDirectPeerName(ctx: Context, value: String) =
+        prefs(ctx).edit().putString(KEY_WIFI_DIRECT_PEER_NAME, value.trim()).apply()
 
     fun setWhitelist(ctx: Context, entries: List<WhitelistEntry>) {
         prefs(ctx).edit().putString(

@@ -3,7 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val releaseVersionCode: Int = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
+val releaseVersionCode: Int = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 8
 
 fun readAppVersion(): String {
     val constantsFile = file("src/main/java/win/downops/clipshare/util/Constants.kt")

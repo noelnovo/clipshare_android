@@ -73,10 +73,12 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
 
     // Connection settings
     var host by rememberSaveable { mutableStateOf(Prefs.serverHost(context)) }
+    var wifiDirectPeerName by rememberSaveable { mutableStateOf(Prefs.wifiDirectPeerName(context)) }
     var port by rememberSaveable { mutableStateOf(Prefs.serverPort(context).toString()) }
     var token by rememberSaveable { mutableStateOf(Prefs.token(context)) }
     var discovery by rememberSaveable { mutableStateOf(Prefs.discoveryEnabled(context)) }
     var wifiDirect by rememberSaveable { mutableStateOf(Prefs.wifiDirectEnabled(context)) }
+    var wifiDirectRole by rememberSaveable { mutableStateOf(Prefs.wifiDirectRole(context)) }
     var beaconPort by rememberSaveable { mutableStateOf(Prefs.discoveryBeaconPort(context).toString()) }
     var mode by rememberSaveable { mutableStateOf(Prefs.connectionMode(context)) }
     var ipVersion by rememberSaveable { mutableStateOf(Prefs.ipVersion(context)) }
@@ -171,6 +173,7 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
         Prefs.setDeviceName(context, name)
         Prefs.setAppMode(context, appMode)
         Prefs.setServerHost(context, host)
+        Prefs.setWifiDirectPeerName(context, wifiDirectPeerName)
         Prefs.setServerPort(context, port.toIntOrNull() ?: Constants.Discovery.DEFAULT_SERVER_PORT)
         Prefs.setServerToken(context, serverToken)
         Prefs.setServerTlsEnabled(context, serverTls)
@@ -178,6 +181,7 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
         Prefs.setToken(context, token)
         Prefs.setDiscoveryEnabled(context, discovery)
         Prefs.setWifiDirectEnabled(context, wifiDirect)
+        Prefs.setWifiDirectRole(context, wifiDirectRole)
         Prefs.setDiscoveryBeaconPort(context, beaconPort.toIntOrNull() ?: Constants.Discovery.DEFAULT_BEACON_PORT)
         Prefs.setTlsEnabled(context, tlsEnabled)
         Prefs.setVerifyHostname(context, verifyHostname)
@@ -322,6 +326,14 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
+                    value = wifiDirectPeerName,
+                    onValueChange = { wifiDirectPeerName = it },
+                    label = { Text("Wi-Fi Direct peer name (Windows)") },
+                    supportingText = { Text("Optional if only one Wi-Fi Direct peer is nearby. To choose among several, enter the Windows computer name (run hostname in Command Prompt).") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
                     value = port,
                     onValueChange = { port = it.filter(Char::isDigit) },
                     label = { Text("Server port") },
@@ -353,7 +365,7 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                 )
                 SwitchRow(
                     title = "TLS (wss)",
-                    subtitle = "Requires a client certificate or trusted CA",
+                    subtitle = "Required for Wi-Fi Direct; import a client certificate issued by the server",
                     checked = tlsEnabled,
                     onCheckedChange = { tlsEnabled = it },
                 )
@@ -472,10 +484,37 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                 )
                 SwitchRow(
                     title = "Enable Wi-Fi Direct",
-                    subtitle = "Discover and connect to ClipShare devices without a router. Android may request Nearby devices and location access.",
+                    subtitle = "Direct links require TLS with an imported client certificate. Android may request Nearby devices and location access.",
                     checked = wifiDirect,
                     onCheckedChange = { wifiDirect = it },
                 )
+                if (wifiDirect) {
+                    // The role is independent of the app mode above: it only
+                    // chooses whether this phone joins or hosts the P2P group.
+                    Text("Wi-Fi Direct role", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        if (wifiDirectRole == Prefs.WIFI_DIRECT_ROLE_HOST)
+                            "This phone creates the group and runs the server on it. Windows connects to it."
+                        else
+                            "This phone joins a Windows group owner as a client. Works with Client app mode.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        SegmentedButton(
+                            selected = wifiDirectRole == Prefs.WIFI_DIRECT_ROLE_CONNECT,
+                            onClick = { wifiDirectRole = Prefs.WIFI_DIRECT_ROLE_CONNECT },
+                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                            modifier = Modifier.testTag("wd_role_connect"),
+                        ) { Text("Connect") }
+                        SegmentedButton(
+                            selected = wifiDirectRole == Prefs.WIFI_DIRECT_ROLE_HOST,
+                            onClick = { wifiDirectRole = Prefs.WIFI_DIRECT_ROLE_HOST },
+                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                            modifier = Modifier.testTag("wd_role_host"),
+                        ) { Text("Host group") }
+                    }
+                }
                 if (logsEnabled) {
                     OutlinedTextField(
                         value = maxLogKb,

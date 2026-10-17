@@ -4,6 +4,9 @@ ClipShare keeps your clipboard in sync across devices on your local network. It 
 JSON-over-WebSocket protocol and can interoperate with the ClipShare Go desktop daemon or with
 other ClipShare Android devices.
 
+See [`docs/connection-scenarios.md`](docs/connection-scenarios.md) for the
+Windows/Linux/Android pairing matrix and mTLS setup steps.
+
 ## What it does
 
 Every device runs in one of two roles:
@@ -19,7 +22,8 @@ not in the foreground.
 
 Discovery works automatically over your LAN using mDNS (`_clipshare._tcp`) and UDP beacon
 announcements, so there is normally no IP address to type in. Wi-Fi Direct can also be enabled for
-direct Android-to-Android sharing when no router is available.
+direct sharing without a router. The app supports Android-to-Android and Android Client to Windows
+Wi-Fi Direct group-owner connections. See [connection scenarios](docs/connection-scenarios.md).
 
 ## Workflows
 
@@ -67,7 +71,7 @@ desktop daemon and several phones can all join the same server.
 - **Auto-discovery** — mDNS (`_clipshare._tcp`) and UDP beacon announcements (port `40404`); the
   announced `tls` flag switches the client to `wss` automatically
 - **Server mode** — a phone can act as the hub for phone-to-phone sync
-- **Wi-Fi Direct** — optional Android-to-Android discovery and sharing without a router
+- **Wi-Fi Direct** — direct Android-to-Android and Android-to-Windows sharing without a router
 - **Foreground service** — keeps the connection alive and writes incoming clipboard content in the
   background
 - **Quick Settings tile** — toggle sync from the notification shade

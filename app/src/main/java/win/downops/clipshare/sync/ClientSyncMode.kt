@@ -1,9 +1,11 @@
 package win.downops.clipshare.sync
 
 import android.content.Context
+import android.net.Network
 import win.downops.clipshare.certs.CertStore
 import win.downops.clipshare.discover.DiscoveryManager
 import win.downops.clipshare.discover.WifiDirectManager
+import win.downops.clipshare.discover.WifiDirectPolicy
 import win.downops.clipshare.logs.Log
 import win.downops.clipshare.settings.Prefs
 import win.downops.clipshare.state.AppState
@@ -93,12 +95,26 @@ class ClientSyncMode(
     // ------------------------------------------------------------------
 
     private fun startDiscovery() {
-        if (Prefs.wifiDirectEnabled(context)) {
-            val p2p = WifiDirectManager(context, { name, host, port, tls ->
-                onDeviceFound(name, host, port, tls, "wifi_direct")
-            })
-            wifiDirect = p2p
-            p2p.startClient()
+        if (SyncPlan.forContext(context).wifiDirectConnect) {
+            val hasClientCert = CertStore.clientTlsWithCert(context) != null
+            val refusal = WifiDirectPolicy.canStartClient(Prefs.tlsEnabled(context), hasClientCert)
+            if (refusal != null) {
+                Log.w("SyncService", "$refusal; P2P discovery skipped")
+                AppState.onError(refusal)
+                events.updateNotification(refusal)
+            } else {
+                val p2p = WifiDirectManager(
+                    context = context,
+                    onEndpoint = { name, host, port, tls, network ->
+                        onDeviceFound(name, host, port, tls, WifiDirectPolicy.TRANSPORT_WIFI_DIRECT, network)
+                    },
+                    peerName = Prefs.wifiDirectPeerName(context),
+                    fallbackPort = Prefs.serverPort(context),
+                    fallbackTls = true,
+                )
+                wifiDirect = p2p
+                p2p.startClient()
+            }
         }
         if (Prefs.connectionMode(context) == Prefs.MODE_WHITELIST) {
             Log.i("SyncService", "discovery skipped: whitelist mode")
@@ -120,12 +136,37 @@ class ClientSyncMode(
     }
 
     /** Called from the discovery threads whenever a daemon announces itself. */
-    private fun onDeviceFound(name: String, host: String, port: Int, tls: Boolean, source: String) {
+    private fun onDeviceFound(
+        name: String,
+        host: String,
+        port: Int,
+        tls: Boolean,
+        source: String,
+        network: Network? = null,
+    ) {
         if (!running) return
+        val isWifiDirect = WifiDirectPolicy.isWifiDirectEndpoint(host, source)
+        if (isWifiDirect) {
+            val refusal = WifiDirectPolicy.refusalReason(tls, CertStore.clientTlsWithCert(context) != null)
+            if (refusal != null) {
+                Log.e("SyncService", "$refusal ($host:$port)")
+                AppState.onError(refusal)
+                events.updateNotification(refusal)
+                return
+            }
+        }
         // A filled manual host wins: only fall back to discovery once it is
         // unreachable or not configured.
         if (manualActive) return
-        connectTo(host, port, tls, verifyName = false, persist = false, transport = source)
+        connectTo(
+            host,
+            port,
+            tls,
+            verifyName = false,
+            persist = false,
+            transport = if (isWifiDirect) "wifi_direct" else source,
+            network = network,
+        )
     }
 
     override fun switchTo(host: String, port: Int, tls: Boolean) {
@@ -166,20 +207,41 @@ class ClientSyncMode(
         verifyName: Boolean,
         persist: Boolean,
         transport: String = "lan",
+        network: Network? = null,
     ) {
+        val isWifiDirect = WifiDirectPolicy.isWifiDirectEndpoint(host, transport)
+        if (isWifiDirect) {
+            val refusal = WifiDirectPolicy.refusalReason(tls, CertStore.clientTlsWithCert(context) != null)
+            if (refusal != null) {
+                Log.e("SyncService", "$refusal ($host:$port)")
+                AppState.onError(refusal)
+                events.updateNotification(refusal)
+                return
+            }
+        }
         val normalizedHost = HostUtil.normalize(host)
         synchronized(lock) {
-            if (currentHost == normalizedHost && currentPort == port && currentTls == tls &&
-                currentTransport == transport && ws != null) {
-                Log.d("SyncService", "already connected/connecting to $host:$port")
-                return
+            val sameEndpoint = currentHost == normalizedHost && currentPort == port && currentTls == tls
+            if (sameEndpoint && ws != null) {
+                // LAN mDNS becomes visible after a P2P group forms and can
+                // report the same endpoint a few seconds before the P2P info
+                // callback. Do not cancel an in-flight socket for a duplicate
+                // discovery result. If Android has a bound P2P Network, replace
+                // a LAN socket with one explicitly routed over that network.
+                if (transport == "wifi_direct" && currentTransport != "wifi_direct" && network != null) {
+                    Log.i("SyncService", "rebinding $host:$port WebSocket to the Wi-Fi Direct network")
+                } else {
+                    if (transport == "wifi_direct") currentTransport = "wifi_direct"
+                    Log.d("SyncService", "already connected/connecting to $host:$port ($transport)")
+                    return
+                }
             }
             currentHost = normalizedHost
             currentPort = port
             currentTls = tls
             currentTransport = transport
             ws?.stop()
-            val socket = buildSocket(normalizedHost, port, tls, verifyName)
+            val socket = buildSocket(normalizedHost, port, tls, verifyName, network)
             ws = socket
             if (socket != null) {
                 if (persist) {
@@ -196,7 +258,13 @@ class ClientSyncMode(
         }
     }
 
-    private fun buildSocket(host: String, port: Int, tls: Boolean, verifyName: Boolean): WsClient? {
+    private fun buildSocket(
+        host: String,
+        port: Int,
+        tls: Boolean,
+        verifyName: Boolean,
+        network: Network? = null,
+    ): WsClient? {
         val token = Prefs.token(context)
         val scheme = if (tls) Constants.Protocol.Scheme.WSS else Constants.Protocol.Scheme.WS
         var url = "$scheme://$host:$port${Constants.Protocol.WS_PATH}"
@@ -268,6 +336,7 @@ class ClientSyncMode(
                 AppState.onError(msg)
             },
             verifyHostname = Prefs.verifyHostname(context),
+            network = network,
         )
         return socket
     }

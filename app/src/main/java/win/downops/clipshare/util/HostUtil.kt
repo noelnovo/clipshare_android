@@ -61,6 +61,14 @@ object HostUtil {
         return parts.all { it.toIntOrNull() in 0..255 }
     }
 
+    /** Common Android/Windows Wi-Fi Direct group-owner subnets. */
+    fun isWifiDirectAddress(host: String): Boolean {
+        val parts = display(host).split('.')
+        if (parts.size != 4) return false
+        val octets = parts.map { it.toIntOrNull() ?: return false }
+        return octets[0] == 192 && octets[1] == 168 && octets[2] in setOf(49, 137)
+    }
+
     /**
      * Returns true when [host] matches the requested [ipVersion] preference.
      * Hostnames always pass; the preference only filters numeric IPv4/IPv6

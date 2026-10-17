@@ -19,12 +19,18 @@ Devices advertise themselves and are discovered over your LAN using two mechanis
 | UDP beacons | broadcast to `255.255.255.255:40404` every ~1 s |
 | Server listen port | `40403` (`ws://<host>:40403/ws`) |
 
-When **Wi-Fi Direct** is enabled in Settings, the app also uses Android's
-Wi-Fi P2P service discovery. This creates a direct WPA2-protected link between
-ClipShare devices without requiring a router. Clipboard data still uses the
-same WebSocket endpoint and protocol after the P2P group is formed. Android may
-request Nearby devices permission (and location permission/location services on
-older Android versions). LAN discovery remains available as a fallback.
+When **Wi-Fi Direct** is enabled in Settings, Android first searches for
+ClipShare's Android P2P service and then can search for a Windows Wi-Fi Direct
+peer. If exactly one peer is visible, the app selects it automatically; if
+several are visible, enter the Windows computer name (run `hostname` on Windows)
+in Client settings to select the intended peer. Connecting forms a direct
+WPA2-protected group; the Pixel can keep mobile data as its internet connection
+while ClipShare sends clipboard traffic over the P2P link. Android may request
+Nearby devices permission (and location permission/location services on older
+Android versions). LAN discovery remains available independently.
+
+See [connection scenarios](connection-scenarios.md) for Windows/Linux server,
+Android server, Wi-Fi Direct, TLS, and plaintext setup steps.
 
 Discovery is on by default, so in most cases there is nothing to configure: a client shows servers
 under **Devices** on the home screen and you tap one to connect. The beacon advertises the server's
@@ -65,6 +71,15 @@ network. **Leave empty for pure discovery**; when filled, the client prefers thi
 falls back to discovery when it is unreachable. This is not a fallback list — it is a *preferred*
 target.
 
+### Wi-Fi Direct peer name (Windows)
+
+When connecting directly to the Windows daemon over Wi-Fi Direct, leave this
+blank to connect automatically when exactly one P2P peer is nearby. If multiple
+peers are visible, enter the Windows computer name (the output of `hostname` in
+Command Prompt) to select it. Leave the Server (IP or hostname) field blank.
+After the group forms, the client connects to the configured server port over
+the Wi-Fi Direct network.
+
 ### Server port
 
 The TCP port of the server's WebSocket endpoint. Default `40403`. Used both for manual connects and
@@ -83,9 +98,11 @@ manually or via whitelist and do not want the scanning traffic.
 
 ### TLS (wss)
 
-Default **off**. Enables encrypted `wss://` connections to desktop daemons or Android servers.
-Requires a client certificate **or** a trusted CA to be present, otherwise the connection is refused
-with a clear error.
+Default **off**. LAN discovery follows the server's advertised TLS setting.
+Manual targets and Windows Wi-Fi Direct peer fallback use this switch to select
+`wss://`. Wi-Fi Direct refuses to connect unless TLS is enabled and a client
+certificate issued by the target server's CA is imported. A CA certificate
+alone is not a client identity.
 
 ### Client certificates
 
@@ -151,6 +168,67 @@ while this device runs as a server. When the device is in server mode, its store
 certificates are **deleted after 7 days** (counted from the last time server mode was saved). While
 they are still present, the settings screen shows a warning with the deletion date; a client that
 wants to connect over TLS must scan a fresh client-cert QR from this server's screen.
+
+---
+
+## Wi-Fi Direct with mutual TLS
+
+Wi-Fi Direct supplies a direct WPA2-protected link; mTLS separately authenticates
+both ClipShare endpoints and encrypts the WebSocket traffic. The Android Client
+TLS switch is global, so enabling it also secures LAN connections from this
+client.
+
+### Android Client → Windows or Linux server
+
+1. On the Windows/Linux server, create a private CA once and issue the server
+   identity and a client identity for the Pixel. On Linux, run these commands
+   as the daemon user; on Windows, run them in a normal PowerShell session:
+
+   ```sh
+   clipshare cert init                                  # skip if a CA already exists
+   clipshare cert issue --name desktop --type server
+   clipshare cert issue --name pixel-9 --type client
+   clipshare cert qr --name pixel-9 --type client --out pixel-9-client.png
+   ```
+
+   Keep the CA private key on the server. Share only the client-cert QR or
+   exported client `.p12` with the Pixel. The Windows installer creates these
+   artifacts on a fresh install; the QR is saved under
+   `%APPDATA%\clipshare\certs\android-client.png`.
+2. Enable `[tls].enabled = true` in the desktop daemon config and restart it.
+   For a dynamic Wi-Fi Direct group-owner address, set
+   `[tls].verify_hostname = false`; this still validates the certificate chain
+   against the CA. On Linux, first create the P2P group with the OS networking
+   tools; the daemon advertises on the resulting interface.
+3. On the Pixel, use **Settings → Client → Scan client secret** to scan the QR
+   (or **Select client secret** to import the `.p12`), enable **TLS (wss)** and
+   **Wi-Fi Direct**, leave the manual server host blank, and set the optional
+   Windows peer name only if multiple P2P peers are nearby.
+
+The server presents its server certificate and requires the Pixel's
+CA-signed client certificate. The Android client trusts the CA bundled with
+the imported credential and presents the client identity during the TLS
+handshake.
+
+### Android Client → Android Server
+
+1. Set one phone to **Server** mode, enable **Wi-Fi Direct** and **Server TLS**,
+   and save. The server generates its CA and server identity.
+2. On that server phone, open **Settings → Server → Show client secret**.
+3. On the other phone, select **Client** mode, enable **Wi-Fi Direct** and
+   **TLS (wss)**, then use **Scan client secret** to scan the server phone's QR.
+   Leave the manual server host blank and start sync.
+
+The QR contains a fresh client private key, a client certificate issued by the
+Android server's CA, and that CA certificate. The server accepts only clients
+issued by its own CA. Regenerating the Android server's CA requires issuing and
+sharing new client credentials.
+
+> **Plaintext policy status:** TLS-enabled servers already reject clients
+> without an acceptable client certificate. The Android client is being updated
+> to refuse Wi-Fi Direct endpoints that do not negotiate mTLS; until that
+> transport-specific guard is shipped, leave TLS enabled on both sides for
+> every Wi-Fi Direct session.
 
 ---
 
