@@ -9,6 +9,7 @@ import androidx.compose.foundation.pager.PagerState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import win.downops.clipshare.state.DiscoveredDevice
+import win.downops.clipshare.state.WifiDirectPeer
 import win.downops.clipshare.ui.AccessibilityScreen
 import win.downops.clipshare.ui.LogsScreen
 import win.downops.clipshare.ui.MainScreen
@@ -29,6 +30,8 @@ fun AppNavigationHost(
     saveSettings: ((() -> Unit)?) -> Unit,
     onPushText: (String) -> Unit,
     onConnectTo: (DiscoveredDevice) -> Unit,
+    onConnectWifiDirect: (WifiDirectPeer) -> Unit,
+    onWaitForPeers: () -> Unit,
     onToggle: () -> Unit,
     onClearHistory: () -> Unit,
     onSettingsBack: () -> Unit,
@@ -45,6 +48,8 @@ fun AppNavigationHost(
             AppScreen.Main -> MainScreen(
                 onPushText = onPushText,
                 onConnectTo = onConnectTo,
+                onConnectWifiDirect = onConnectWifiDirect,
+                onWaitForPeers = onWaitForPeers,
                 onToggle = onToggle,
                 onClearHistory = onClearHistory,
             )

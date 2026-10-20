@@ -163,6 +163,12 @@ class MainActivity : ComponentActivity() {
                         AppState.startSync(context)
                     }
                 },
+                onConnectWifiDirect = { peer ->
+                    AppState.service?.connectToWifiDirectPeer(peer)
+                },
+                onWaitForPeers = {
+                    AppState.service?.waitForWifiDirectPeers()
+                },
                 onToggle = {
                     if (AppState.running.value) {
                         AppState.stopSync(context)

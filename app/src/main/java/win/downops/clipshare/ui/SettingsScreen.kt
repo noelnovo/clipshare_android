@@ -73,12 +73,12 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
 
     // Connection settings
     var host by rememberSaveable { mutableStateOf(Prefs.serverHost(context)) }
-    var wifiDirectPeerName by rememberSaveable { mutableStateOf(Prefs.wifiDirectPeerName(context)) }
     var port by rememberSaveable { mutableStateOf(Prefs.serverPort(context).toString()) }
     var token by rememberSaveable { mutableStateOf(Prefs.token(context)) }
     var discovery by rememberSaveable { mutableStateOf(Prefs.discoveryEnabled(context)) }
-    var wifiDirect by rememberSaveable { mutableStateOf(Prefs.wifiDirectEnabled(context)) }
-    var wifiDirectRole by rememberSaveable { mutableStateOf(Prefs.wifiDirectRole(context)) }
+    var wifiDirectAutoConnect by rememberSaveable { mutableStateOf(Prefs.wifiDirectAutoConnect(context)) }
+    var lastPeerName by rememberSaveable { mutableStateOf(Prefs.wifiDirectLastPeerName(context)) }
+    var lastPeerAddress by rememberSaveable { mutableStateOf(Prefs.wifiDirectLastPeerAddress(context)) }
     var beaconPort by rememberSaveable { mutableStateOf(Prefs.discoveryBeaconPort(context).toString()) }
     var mode by rememberSaveable { mutableStateOf(Prefs.connectionMode(context)) }
     var ipVersion by rememberSaveable { mutableStateOf(Prefs.ipVersion(context)) }
@@ -170,21 +170,29 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
             return
         }
 
+        val p2p = appMode == Prefs.APP_MODE_WIFI_DIRECT
+        val effectiveTls = p2p || tlsEnabled
+        val effectiveServerTls = p2p || serverTls
+        val effectiveVerifyHostname = if (p2p) false else verifyHostname
+        val effectivePort = when (appMode) {
+            Prefs.APP_MODE_SERVER, Prefs.APP_MODE_WIFI_DIRECT ->
+                serverPort.toIntOrNull() ?: Constants.Discovery.DEFAULT_SERVER_PORT
+            else -> port.toIntOrNull() ?: Constants.Discovery.DEFAULT_SERVER_PORT
+        }
+
         Prefs.setDeviceName(context, name)
         Prefs.setAppMode(context, appMode)
         Prefs.setServerHost(context, host)
-        Prefs.setWifiDirectPeerName(context, wifiDirectPeerName)
-        Prefs.setServerPort(context, port.toIntOrNull() ?: Constants.Discovery.DEFAULT_SERVER_PORT)
+        Prefs.setServerPort(context, effectivePort)
         Prefs.setServerToken(context, serverToken)
-        Prefs.setServerTlsEnabled(context, serverTls)
+        Prefs.setServerTlsEnabled(context, effectiveServerTls)
         Prefs.setServerBindIpVersion(context, serverBindIpVersion)
         Prefs.setToken(context, token)
         Prefs.setDiscoveryEnabled(context, discovery)
-        Prefs.setWifiDirectEnabled(context, wifiDirect)
-        Prefs.setWifiDirectRole(context, wifiDirectRole)
+        Prefs.setWifiDirectAutoConnect(context, wifiDirectAutoConnect)
         Prefs.setDiscoveryBeaconPort(context, beaconPort.toIntOrNull() ?: Constants.Discovery.DEFAULT_BEACON_PORT)
-        Prefs.setTlsEnabled(context, tlsEnabled)
-        Prefs.setVerifyHostname(context, verifyHostname)
+        Prefs.setTlsEnabled(context, effectiveTls)
+        Prefs.setVerifyHostname(context, effectiveVerifyHostname)
         Prefs.setLogsEnabled(context, logsEnabled)
         Prefs.setConnectionMode(context, mode)
         Prefs.setIpVersion(context, ipVersion)
@@ -209,25 +217,23 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
             Toast.makeText(context, "Client certificates removed (server-mode retention)", Toast.LENGTH_LONG).show()
         }
 
-        // Generate the server certs here (not in the sync service) the first
-        // time server TLS is enabled, so the warning dialog can appear at the
-        // exact moment the cert files are generated. ServerSyncMode's bootstrap
-        // then becomes a no-op.
-        val generatedNow = appMode == Prefs.APP_MODE_SERVER &&
-            serverTls &&
-            !ServerCertManager.hasCerts(context)
+        // Generate the server identity here (not in the sync service) the first
+        // time it is needed. Server mode uses the user's TLS switch; Wi-Fi
+        // Direct always hosts over mTLS.
+        val needsServerCerts = p2p || (appMode == Prefs.APP_MODE_SERVER && serverTls)
+        val generatedNow = needsServerCerts && !ServerCertManager.hasCerts(context)
         if (generatedNow) {
             ServerCertManager.generate(context, Prefs.deviceName(context))
             serverCertStatus = serverCertStatusText(context)
         }
+        val showRetentionWarning = generatedNow && appMode == Prefs.APP_MODE_SERVER
 
         AppState.setAppMode(appMode)
         if (AppState.running.value) {
-            AppState.stopSync(context)
-            AppState.startSync(context)
+            AppState.restartSync(context)
         }
 
-        if (generatedNow) {
+        if (showRetentionWarning) {
             showClientCertWarning = true
             pendingBackAfterWarning = true
         } else {
@@ -280,7 +286,7 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                 )
                 Text("App mode", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "Choose whether this device connects to other servers or acts as one.",
+                    "Client and Server use the LAN. Wi-Fi Direct creates a direct link and does not need a shared network.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -288,15 +294,27 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                     SegmentedButton(
                         selected = appMode == Prefs.APP_MODE_CLIENT,
                         onClick = { appMode = Prefs.APP_MODE_CLIENT },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
                         modifier = Modifier.testTag("mode_client"),
                     ) { Text("Client") }
                     SegmentedButton(
                         selected = appMode == Prefs.APP_MODE_SERVER,
                         onClick = { appMode = Prefs.APP_MODE_SERVER },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
                         modifier = Modifier.testTag("mode_server"),
                     ) { Text("Server") }
+                    SegmentedButton(
+                        selected = appMode == Prefs.APP_MODE_WIFI_DIRECT,
+                        onClick = {
+                            appMode = Prefs.APP_MODE_WIFI_DIRECT
+                            // Wi-Fi Direct is mTLS-only and P2P addresses change.
+                            tlsEnabled = true
+                            serverTls = true
+                            verifyHostname = false
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
+                        modifier = Modifier.testTag("mode_wifi_direct"),
+                    ) { Text("Wi-Fi Direct") }
                 }
                 // History
                 SettingsSectionTitle("History")
@@ -314,142 +332,158 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                     modifier = Modifier.fillMaxWidth(),
                 )
 
-                // Client
-                SettingsSectionTitle("Client")
-                OutlinedTextField(
-                    value = host,
-                    onValueChange = { host = it },
-                    label = { Text("Server (IP or hostname)") },
-                    supportingText = { Text("Leave blank if using Discovery.") },
-                    placeholder = { Text("e.g. 192.168.1.10") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = wifiDirectPeerName,
-                    onValueChange = { wifiDirectPeerName = it },
-                    label = { Text("Wi-Fi Direct peer name (Windows)") },
-                    supportingText = { Text("Optional if only one Wi-Fi Direct peer is nearby. To choose among several, enter the Windows computer name (run hostname in Command Prompt).") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = port,
-                    onValueChange = { port = it.filter(Char::isDigit) },
-                    label = { Text("Server port") },
-                    supportingText = if (portError is ValidationResult.Invalid) {
-                        { Text(portError.message) }
-                    } else {
-                        null
-                    },
-                    isError = portError is ValidationResult.Invalid,
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("client_port"),
-                )
-                OutlinedTextField(
-                    value = token,
-                    onValueChange = { token = it },
-                    label = { Text("Shared token (optional)") },
-                    supportingText = { Text("Appended to the WebSocket URL as ?token=... when set.") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                SwitchRow(
-                    title = "Discovery",
-                    subtitle = "Browse for servers via mDNS and UDP beacons",
-                    checked = discovery,
-                    onCheckedChange = { discovery = it },
-                )
-                SwitchRow(
-                    title = "TLS (wss)",
-                    subtitle = "Required for Wi-Fi Direct; import a client certificate issued by the server",
-                    checked = tlsEnabled,
-                    onCheckedChange = { tlsEnabled = it },
-                )
-                Text("Client certificates", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "Used for mutual TLS. The certificate matching the server's CA is used automatically.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                clientCerts.forEach { cert ->
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(cert.caSubject, style = MaterialTheme.typography.bodyMedium)
-                        }
-                        IconButton(onClick = {
+                if (appMode == Prefs.APP_MODE_CLIENT) {
+                    SettingsSectionTitle("Client")
+                    OutlinedTextField(
+                        value = host,
+                        onValueChange = { host = it },
+                        label = { Text("Server (IP or hostname)") },
+                        supportingText = { Text("Leave blank if using Discovery.") },
+                        placeholder = { Text("e.g. 192.168.1.10") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = port,
+                        onValueChange = { port = it.filter(Char::isDigit) },
+                        label = { Text("Server port") },
+                        supportingText = if (portError is ValidationResult.Invalid) {
+                            { Text(portError.message) }
+                        } else {
+                            null
+                        },
+                        isError = portError is ValidationResult.Invalid,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("client_port"),
+                    )
+                    OutlinedTextField(
+                        value = token,
+                        onValueChange = { token = it },
+                        label = { Text("Shared token (optional)") },
+                        supportingText = { Text("Appended to the WebSocket URL as ?token=... when set.") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    SwitchRow(
+                        title = "Discovery",
+                        subtitle = "Browse for servers via mDNS and UDP beacons",
+                        checked = discovery,
+                        onCheckedChange = { discovery = it },
+                    )
+                    SwitchRow(
+                        title = "TLS (wss)",
+                        subtitle = "Import a client certificate issued by the server",
+                        checked = tlsEnabled,
+                        onCheckedChange = { tlsEnabled = it },
+                    )
+                    ClientSecretsSection(
+                        clientCerts = clientCerts,
+                        onDelete = { cert ->
                             CertStore.deleteClientCert(context, cert.id)
                             clientCerts.clear()
                             clientCerts.addAll(CertStore.clientCerts(context))
-                        }) { Text("\u2715") }
-                    }
+                        },
+                        onPick = { clientCertPicker.launch("*/*") },
+                        onScan = { qrScanner.launch(Intent(context, CaptureActivity::class.java)) },
+                    )
                 }
-                OutlinedButton(
-                    onClick = { clientCertPicker.launch("*/*") },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Select client secret") }
-                OutlinedButton(
-                    onClick = { qrScanner.launch(Intent(context, CaptureActivity::class.java)) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Scan client secret") }
 
-                // Server
-                SettingsSectionTitle("Server")
-                OutlinedTextField(
-                    value = serverToken,
-                    onValueChange = { serverToken = it },
-                    label = { Text("Server token (optional)") },
-                    supportingText = { Text("Clients must include this token as a query parameter to connect.") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                SwitchRow(
-                    title = "TLS (wss)",
-                    subtitle = "Generate a local CA + server certificate. Clients must present a client certificate (mutual TLS).",
-                    checked = serverTls,
-                    onCheckedChange = { serverTls = it },
-                    testTag = "server_tls",
-                )
-                Text(
-                    serverCertStatus,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedButton(
-                    onClick = {
-                        ServerCertManager.generate(context, Prefs.deviceName(context))
-                        serverCertStatus = serverCertStatusText(context)
-                        if (appMode == Prefs.APP_MODE_SERVER) {
+                if (appMode == Prefs.APP_MODE_SERVER) {
+                    SettingsSectionTitle("Server")
+                    OutlinedTextField(
+                        value = serverToken,
+                        onValueChange = { serverToken = it },
+                        label = { Text("Server token (optional)") },
+                        supportingText = { Text("Clients must include this token as a query parameter to connect.") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    SwitchRow(
+                        title = "TLS (wss)",
+                        subtitle = "Generate a local CA + server certificate. Clients must present a client certificate (mutual TLS).",
+                        checked = serverTls,
+                        onCheckedChange = { serverTls = it },
+                        testTag = "server_tls",
+                    )
+                    ServerIdentitySection(
+                        status = serverCertStatus,
+                        onRegenerate = {
+                            ServerCertManager.generate(context, Prefs.deviceName(context))
+                            serverCertStatus = serverCertStatusText(context)
                             showClientCertWarning = true
-                        }
-                        Toast.makeText(context, "Server certificate regenerated", Toast.LENGTH_SHORT).show()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Regenerate cert") }
-                OutlinedButton(
-                    onClick = {
-                        val uri = ServerCertManager.getP12ShareUri(context)
-                        if (uri != null) {
-                            val intent = Intent(Intent.ACTION_SEND).apply {
-                                type = "application/x-pkcs12"
-                                putExtra(Intent.EXTRA_STREAM, uri)
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            }
-                            context.startActivity(Intent.createChooser(intent, "Share certificate bundle"))
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Share client secret") }
-                OutlinedButton(
-                    onClick = { showClientCertQr = true },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Show client secret") }
+                            Toast.makeText(context, "Server certificate regenerated", Toast.LENGTH_SHORT).show()
+                        },
+                        onShare = { shareServerBundle(context) },
+                        onShowQr = { showClientCertQr = true },
+                    )
+                }
+
+                if (appMode == Prefs.APP_MODE_WIFI_DIRECT) {
+                    SettingsSectionTitle("Wi-Fi Direct")
+                    Text(
+                        "The app starts by waiting for nearby devices. Pick a device on the main screen to connect, " +
+                            "or wait for another device to connect to this phone. Clipboard sync is bidirectional.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "Wi-Fi Direct always uses mutual TLS. Plaintext P2P is refused.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    SwitchRow(
+                        title = "Auto-connect",
+                        subtitle = "Reconnect to the last used Wi-Fi Direct device when it is nearby.",
+                        checked = wifiDirectAutoConnect,
+                        onCheckedChange = { wifiDirectAutoConnect = it },
+                    )
+                    if (lastPeerName.isNotBlank() || lastPeerAddress.isNotBlank()) {
+                        Text(
+                            "Last device: ${lastPeerName.ifBlank { lastPeerAddress }}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                Prefs.clearWifiDirectLastPeer(context)
+                                lastPeerName = ""
+                                lastPeerAddress = ""
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Forget last device") }
+                    } else {
+                        Text(
+                            "No last device yet. The first device you connect to becomes the auto-connect target.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    ClientSecretsSection(
+                        clientCerts = clientCerts,
+                        onDelete = { cert ->
+                            CertStore.deleteClientCert(context, cert.id)
+                            clientCerts.clear()
+                            clientCerts.addAll(CertStore.clientCerts(context))
+                        },
+                        onPick = { clientCertPicker.launch("*/*") },
+                        onScan = { qrScanner.launch(Intent(context, CaptureActivity::class.java)) },
+                        emptyHint = "Import a client secret from another Wi-Fi Direct host before connecting to it.",
+                    )
+                    Text("This device as host", style = MaterialTheme.typography.titleSmall)
+                    ServerIdentitySection(
+                        status = serverCertStatus,
+                        onRegenerate = {
+                            ServerCertManager.generate(context, Prefs.deviceName(context))
+                            serverCertStatus = serverCertStatusText(context)
+                            Toast.makeText(context, "Host certificate regenerated", Toast.LENGTH_SHORT).show()
+                        },
+                        onShare = { shareServerBundle(context) },
+                        onShowQr = { showClientCertQr = true },
+                    )
+                }
             }
         } else {
             Column(
@@ -460,7 +494,12 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 // General
-                SettingsSectionTitle("General")
+                SettingsSectionTitle("Advanced")
+                Text(
+                    "Advanced settings are always available. LAN discovery, whitelist and IP-version options apply to Client mode.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 OutlinedTextField(
                     value = beaconPort,
                     onValueChange = { beaconPort = it.filter(Char::isDigit) },
@@ -482,39 +521,6 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                     onCheckedChange = { logsEnabled = it },
                     testTag = "enable_logs",
                 )
-                SwitchRow(
-                    title = "Enable Wi-Fi Direct",
-                    subtitle = "Direct links require TLS with an imported client certificate. Android may request Nearby devices and location access.",
-                    checked = wifiDirect,
-                    onCheckedChange = { wifiDirect = it },
-                )
-                if (wifiDirect) {
-                    // The role is independent of the app mode above: it only
-                    // chooses whether this phone joins or hosts the P2P group.
-                    Text("Wi-Fi Direct role", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        if (wifiDirectRole == Prefs.WIFI_DIRECT_ROLE_HOST)
-                            "This phone creates the group and runs the server on it. Windows connects to it."
-                        else
-                            "This phone joins a Windows group owner as a client. Works with Client app mode.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                        SegmentedButton(
-                            selected = wifiDirectRole == Prefs.WIFI_DIRECT_ROLE_CONNECT,
-                            onClick = { wifiDirectRole = Prefs.WIFI_DIRECT_ROLE_CONNECT },
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                            modifier = Modifier.testTag("wd_role_connect"),
-                        ) { Text("Connect") }
-                        SegmentedButton(
-                            selected = wifiDirectRole == Prefs.WIFI_DIRECT_ROLE_HOST,
-                            onClick = { wifiDirectRole = Prefs.WIFI_DIRECT_ROLE_HOST },
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                            modifier = Modifier.testTag("wd_role_host"),
-                        ) { Text("Host group") }
-                    }
-                }
                 if (logsEnabled) {
                     OutlinedTextField(
                         value = maxLogKb,
@@ -545,6 +551,7 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (appMode == Prefs.APP_MODE_CLIENT) {
                 Text("Connection mode", style = MaterialTheme.typography.titleSmall)
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                     SegmentedButton(
@@ -619,9 +626,17 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                     checked = verifyHostname,
                     onCheckedChange = { verifyHostname = it },
                 )
+                }
+                if (appMode == Prefs.APP_MODE_WIFI_DIRECT) {
+                    Text(
+                        "Hostname verification is disabled for Wi-Fi Direct because the group-owner IP address changes.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
 
-                // Server
-                SettingsSectionTitle("Server")
+                if (appMode == Prefs.APP_MODE_SERVER || appMode == Prefs.APP_MODE_WIFI_DIRECT) {
+                SettingsSectionTitle("Host / server port")
                 Text("Bind address", style = MaterialTheme.typography.titleSmall)
                 Text(
                     "Choose whether the server listens on IPv4, IPv6, or the current default.",
@@ -661,6 +676,7 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                         .fillMaxWidth()
                         .testTag("server_port"),
                 )
+                }
             }
         }
     }
@@ -755,6 +771,79 @@ private fun ClientCertRetentionWarningDialog(context: Context, onDismiss: () -> 
 }
 
 @Composable
+private fun ClientSecretsSection(
+    clientCerts: List<ClientCertInfo>,
+    onDelete: (ClientCertInfo) -> Unit,
+    onPick: () -> Unit,
+    onScan: () -> Unit,
+    emptyHint: String? = null,
+) {
+    Text("Client secrets", style = MaterialTheme.typography.titleSmall)
+    Text(
+        "Used for mutual TLS. The certificate matching the host's CA is offered automatically.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (clientCerts.isEmpty() && emptyHint != null) {
+        Text(
+            emptyHint,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+    clientCerts.forEach { cert ->
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(cert.caSubject, style = MaterialTheme.typography.bodyMedium)
+            }
+            IconButton(onClick = { onDelete(cert) }) { Text("\u2715") }
+        }
+    }
+    OutlinedButton(onClick = onPick, modifier = Modifier.fillMaxWidth()) {
+        Text("Select client secret")
+    }
+    OutlinedButton(onClick = onScan, modifier = Modifier.fillMaxWidth()) {
+        Text("Scan client secret")
+    }
+}
+
+@Composable
+private fun ServerIdentitySection(
+    status: String,
+    onRegenerate: () -> Unit,
+    onShare: () -> Unit,
+    onShowQr: () -> Unit,
+) {
+    Text(
+        status,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    OutlinedButton(onClick = onRegenerate, modifier = Modifier.fillMaxWidth()) {
+        Text("Regenerate certificate")
+    }
+    OutlinedButton(onClick = onShare, modifier = Modifier.fillMaxWidth()) {
+        Text("Share client secret")
+    }
+    OutlinedButton(onClick = onShowQr, modifier = Modifier.fillMaxWidth()) {
+        Text("Show client secret")
+    }
+}
+
+private fun shareServerBundle(context: Context) {
+    val uri = ServerCertManager.getP12ShareUri(context) ?: return
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "application/x-pkcs12"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, "Share certificate bundle"))
+}
+
+@Composable
 private fun SettingsSectionTitle(text: String) {
     Text(
         text = text,
@@ -771,6 +860,7 @@ private fun SwitchRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     testTag: String = title,
+    enabled: Boolean = true,
 ) {
     Row(
         Modifier.fillMaxWidth(),
@@ -784,7 +874,12 @@ private fun SwitchRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange, modifier = Modifier.testTag(testTag))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+            modifier = Modifier.testTag(testTag),
+        )
     }
 }
 

@@ -2,6 +2,8 @@ package win.downops.clipshare.state
 
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import win.downops.clipshare.history.HistoryEntry
 import win.downops.clipshare.history.HistoryManager
 import win.downops.clipshare.logs.Log
@@ -17,6 +19,14 @@ data class DiscoveredDevice(
     val port: Int,
     val source: String,
     val tls: Boolean = false,
+)
+
+/** A nearby Wi-Fi Direct peer, before an IP endpoint exists. */
+data class WifiDirectPeer(
+    val name: String,
+    val address: String,
+    val status: Int,
+    val isGroupOwner: Boolean,
 )
 
 /** App-wide state shared between the UI, service and tile. */
@@ -60,6 +70,13 @@ object AppState {
 
     private val _discovered = MutableStateFlow<List<DiscoveredDevice>>(emptyList())
     val discovered: StateFlow<List<DiscoveredDevice>> = _discovered.asStateFlow()
+
+    private val _wifiDirectPeers = MutableStateFlow<List<WifiDirectPeer>>(emptyList())
+    val wifiDirectPeers: StateFlow<List<WifiDirectPeer>> = _wifiDirectPeers.asStateFlow()
+
+    /** True while Wi-Fi Direct mode is hosting and waiting for a peer. */
+    private val _wifiDirectWaiting = MutableStateFlow(false)
+    val wifiDirectWaiting: StateFlow<Boolean> = _wifiDirectWaiting.asStateFlow()
 
     @Volatile
     var service: SyncService? = null
@@ -106,8 +123,34 @@ object AppState {
         _connectedIp.value = null
         _transport.value = null
         _serverClientCount.value = 0
+        _wifiDirectWaiting.value = false
+        _wifiDirectPeers.value = emptyList()
         Log.i("AppState", "stopSync")
         ctx.stopService(Intent(ctx, SyncService::class.java))
+    }
+
+    /**
+     * Stop the service and start it again once the old instance has actually
+     * finished. Calling stopSync() and startSync() back-to-back is a no-op
+     * because startSync refuses to run while the stop is in flight.
+     */
+    fun restartSync(ctx: Context) {
+        if (!_running.value && !_starting.value) {
+            startSync(ctx)
+            return
+        }
+        stopSync(ctx)
+        val handler = Handler(Looper.getMainLooper())
+        val startWhenStopped = object : Runnable {
+            override fun run() {
+                if (_stopping.value) {
+                    handler.postDelayed(this, 200)
+                } else {
+                    startSync(ctx)
+                }
+            }
+        }
+        handler.postDelayed(startWhenStopped, 200)
     }
 
     fun setAppMode(mode: String) {
@@ -131,6 +174,8 @@ object AppState {
         _connectedIp.value = null
         _transport.value = null
         _serverClientCount.value = 0
+        _wifiDirectWaiting.value = false
+        _wifiDirectPeers.value = emptyList()
         _status.value = "Stopped"
         Log.i("AppState", "service stopped")
     }
@@ -250,6 +295,41 @@ object AppState {
         _discovered.value = devices
     }
 
+    fun setWifiDirectPeers(peers: List<WifiDirectPeer>) {
+        _wifiDirectPeers.value = peers.sortedBy { it.name.lowercase() }
+    }
+
+    /** Host state: this device is advertising and waiting for a P2P client. */
+    fun onWifiDirectWaiting() {
+        _connected.value = false
+        _serverName.value = null
+        _connectedIp.value = null
+        _transport.value = "wifi_direct"
+        _wifiDirectWaiting.value = true
+        _status.value = "Waiting for nearby devices"
+        _lastError.value = null
+        Log.i("AppState", "wifi direct waiting")
+    }
+
+    /** Client state: this device is joining the selected P2P peer. */
+    fun onWifiDirectConnecting(peerName: String) {
+        _connected.value = false
+        _serverName.value = null
+        _connectedIp.value = null
+        _transport.value = "wifi_direct"
+        _wifiDirectWaiting.value = false
+        _status.value = "Connecting to $peerName..."
+        Log.i("AppState", "wifi direct connecting to $peerName")
+    }
+
+    fun onWifiDirectFailed(message: String) {
+        _wifiDirectWaiting.value = false
+        _connected.value = false
+        _status.value = "Wi-Fi Direct: $message"
+        _lastError.value = message
+        Log.w("AppState", "wifi direct failed: $message")
+    }
+
     internal fun resetForTesting() {
         _running.value = false
         _starting.value = false
@@ -264,6 +344,8 @@ object AppState {
         _history.value = emptyList()
         _lastError.value = null
         _discovered.value = emptyList()
+        _wifiDirectPeers.value = emptyList()
+        _wifiDirectWaiting.value = false
         _accessibilityConnected.value = false
         service = null
         appInForeground = false

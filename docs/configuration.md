@@ -53,10 +53,32 @@ to the device model (e.g. `Pixel 9`). Other devices see this name in their devic
 
 ### App mode
 
-- **Client** — this device connects to a server (desktop daemon or another phone).
-- **Server** — this device listens for clients and relays clipboard content between them.
+- **Client** — LAN client: connects to a desktop daemon or another phone over the local network.
+- **Server** — LAN server: listens for LAN clients and relays clipboard content between them.
+- **Wi-Fi Direct** — direct phone-to-phone or phone-to-Windows link. No shared LAN is required.
+
+Only the active mode's settings section is shown. **Advanced** remains available in every mode.
 
 Changing the mode takes effect when you **Save**; if sync is running it is restarted automatically.
+
+### Wi-Fi Direct
+
+The app starts in host/wait state: it creates a P2P group, advertises itself, and lists nearby
+Wi-Fi Direct peers on the main screen. Tap a peer to join it as a client. **Disconnect and wait for
+devices** returns to host/wait state. The role (host/client) is chosen automatically by this flow;
+there is no user-visible role switch.
+
+**Auto-connect** reconnects only to the last successfully used peer. It does not pick an arbitrary
+device. If the last peer is not visible, the app stays in host/wait state and shows the peer list.
+
+Wi-Fi Direct is always mutual TLS. There is no plaintext P2P option. To connect to another host,
+import that host's client secret (QR or `.p12`) under **Client secrets**. To let other devices
+connect to this phone, use **This device as host → Show client secret** or **Share client secret**.
+The peer list hides Wi-Fi Direct printer/display categories that cannot speak ClipShare.
+
+> The host/wait state is useful for receiving data: leave the app running and another ClipShare
+> device can join it. Tap a nearby device when you want to initiate the connection instead.
+> Clipboard sync remains bidirectional in both states.
 
 ---
 
@@ -70,15 +92,6 @@ The address of the server to connect to. A hostname works too, as long as it res
 network. **Leave empty for pure discovery**; when filled, the client prefers this host and only
 falls back to discovery when it is unreachable. This is not a fallback list — it is a *preferred*
 target.
-
-### Wi-Fi Direct peer name (Windows)
-
-When connecting directly to the Windows daemon over Wi-Fi Direct, leave this
-blank to connect automatically when exactly one P2P peer is nearby. If multiple
-peers are visible, enter the Windows computer name (the output of `hostname` in
-Command Prompt) to select it. Leave the Server (IP or hostname) field blank.
-After the group forms, the client connects to the configured server port over
-the Wi-Fi Direct network.
 
 ### Server port
 
@@ -99,10 +112,9 @@ manually or via whitelist and do not want the scanning traffic.
 ### TLS (wss)
 
 Default **off**. LAN discovery follows the server's advertised TLS setting.
-Manual targets and Windows Wi-Fi Direct peer fallback use this switch to select
-`wss://`. Wi-Fi Direct refuses to connect unless TLS is enabled and a client
-certificate issued by the target server's CA is imported. A CA certificate
-alone is not a client identity.
+Manual LAN targets use this switch to select `wss://`. Wi-Fi Direct is separate:
+it always uses mutual TLS and requires a client certificate issued by the target
+host's CA. A CA certificate alone is not a client identity.
 
 ### Client certificates
 

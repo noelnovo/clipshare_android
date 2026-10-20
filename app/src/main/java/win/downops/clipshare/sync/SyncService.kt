@@ -15,6 +15,7 @@ import win.downops.clipshare.certs.CertStore
 import win.downops.clipshare.logs.Log
 import win.downops.clipshare.settings.Prefs
 import win.downops.clipshare.state.AppState
+import win.downops.clipshare.state.WifiDirectPeer
 import win.downops.clipshare.util.Constants
 
 /**
@@ -51,15 +52,10 @@ class SyncService : Service() {
         }
 
         val plan = SyncPlan.forContext(this)
-        if (plan.wifiDirectConnectBlocked) {
-            val msg = "Wi-Fi Direct connect needs Client mode; switch the app mode or use Wi-Fi Direct host"
-            Log.w("SyncService", msg)
-            events.updateNotification(msg)
-        }
-        val m = if (plan.runServer) {
-            ServerSyncMode(this, events)
-        } else {
-            ClientSyncMode(this, events)
+        val m = when {
+            plan.wifiDirect -> WifiDirectSyncMode(this, events)
+            plan.runServer -> ServerSyncMode(this, events)
+            else -> ClientSyncMode(this, events)
         }
         mode = m
         scope.launch {
@@ -97,6 +93,16 @@ class SyncService : Service() {
      */
     fun switchTo(host: String, port: Int, tls: Boolean) {
         mode?.switchTo(host, port, tls)
+    }
+
+    /** Wi-Fi Direct mode: join the peer selected in the nearby-device list. */
+    fun connectToWifiDirectPeer(peer: WifiDirectPeer) {
+        (mode as? WifiDirectSyncMode)?.connectToPeer(peer)
+    }
+
+    /** Wi-Fi Direct mode: stop connecting and wait for nearby devices again. */
+    fun waitForWifiDirectPeers() {
+        (mode as? WifiDirectSyncMode)?.waitForPeers()
     }
 
     // ------------------------------------------------------------------

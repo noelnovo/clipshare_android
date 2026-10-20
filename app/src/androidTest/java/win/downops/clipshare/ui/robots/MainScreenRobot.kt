@@ -36,6 +36,8 @@ class MainScreenRobot(
             MainScreen(
                 onPushText = { lastPushedText = it },
                 onConnectTo = { lastConnectedDevice = it },
+                onConnectWifiDirect = {},
+                onWaitForPeers = {},
                 onToggle = { toggleCount++ },
                 onClearHistory = onClearHistory,
             )

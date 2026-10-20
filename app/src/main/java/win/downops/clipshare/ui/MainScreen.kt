@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import win.downops.clipshare.settings.Prefs
 import win.downops.clipshare.state.AppState
 import win.downops.clipshare.state.DiscoveredDevice
+import win.downops.clipshare.state.WifiDirectPeer
 import win.downops.clipshare.ui.history.HistorySectionHeader
 import win.downops.clipshare.ui.history.historyItems
 import win.downops.clipshare.util.HostUtil
@@ -46,6 +47,8 @@ import win.downops.clipshare.util.HostUtil
 fun MainScreen(
     onPushText: (String) -> Unit,
     onConnectTo: (DiscoveredDevice) -> Unit,
+    onConnectWifiDirect: (WifiDirectPeer) -> Unit,
+    onWaitForPeers: () -> Unit,
     onToggle: () -> Unit,
     onClearHistory: () -> Unit,
 ) {
@@ -60,11 +63,14 @@ fun MainScreen(
     val serverName by AppState.serverName.collectAsState()
     val serverClientCount by AppState.serverClientCount.collectAsState()
     val devices by AppState.discovered.collectAsState()
+    val wifiDirectPeers by AppState.wifiDirectPeers.collectAsState()
+    val wifiDirectWaiting by AppState.wifiDirectWaiting.collectAsState()
     val history by AppState.history.collectAsState()
     val error by AppState.lastError.collectAsState()
 
     var text by remember { mutableStateOf("") }
     val isServer = appMode == Prefs.APP_MODE_SERVER
+    val isWifiDirect = appMode == Prefs.APP_MODE_WIFI_DIRECT
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -73,7 +79,20 @@ fun MainScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            StatusCard(running, starting, stopping, connected, status, serverName, serverClientCount, transport, isServer, onToggle)
+            StatusCard(
+                running = running,
+                starting = starting,
+                stopping = stopping,
+                connected = connected,
+                status = status,
+                serverName = serverName,
+                serverClientCount = serverClientCount,
+                transport = transport,
+                isServer = isServer,
+                isWifiDirect = isWifiDirect,
+                wifiDirectWaiting = wifiDirectWaiting,
+                onToggle = onToggle,
+            )
         }
         item {
             if (error != null) {
@@ -89,8 +108,34 @@ fun MainScreen(
         }
         if (!isServer) {
             item {
-                Text("Devices", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                if (devices.isEmpty()) {
+                Text(
+                    if (isWifiDirect) "Nearby devices (Wi-Fi Direct)" else "Devices",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                if (isWifiDirect) {
+                    if (wifiDirectPeers.isEmpty()) {
+                        Text(
+                            "No nearby devices. Waiting for another ClipShare device with Wi-Fi Direct enabled.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        wifiDirectPeers.forEach { peer ->
+                            WifiDirectDeviceRow(
+                                peer = peer,
+                                connected = connected && peer.name == serverName,
+                                onConnect = { onConnectWifiDirect(peer) },
+                            )
+                        }
+                    }
+                    if (connected) {
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = onWaitForPeers,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Disconnect and wait for devices") }
+                    }
+                } else if (devices.isEmpty()) {
                     Text(
                         "No devices found. Make sure a server is running and you are on the same network, or add the address in Settings.",
                         style = MaterialTheme.typography.bodySmall,
@@ -113,7 +158,15 @@ fun MainScreen(
                 value = text,
                 onValueChange = { text = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text(if (isServer) "Text to broadcast" else "Text to push") },
+                label = {
+                    Text(
+                        when {
+                            isServer -> "Text to broadcast"
+                            isWifiDirect && !connected -> "Text to broadcast to devices"
+                            else -> "Text to push"
+                        }
+                    )
+                },
                 minLines = 2,
             )
             Spacer(Modifier.height(8.dp))
@@ -122,9 +175,22 @@ fun MainScreen(
                     onPushText(text)
                     text = ""
                 },
-                enabled = text.isNotBlank() && (connected || (isServer && running)),
+                enabled = text.isNotBlank() && (
+                    connected ||
+                        (isServer && running) ||
+                        (isWifiDirect && wifiDirectWaiting && serverClientCount > 0 && running)
+                    ),
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text(if (isServer) "Broadcast to clients" else "Send to server") }
+            ) {
+                Text(
+                    when {
+                        isServer -> "Broadcast to clients"
+                        isWifiDirect && !connected -> "Broadcast to devices"
+                        isWifiDirect -> "Send to device"
+                        else -> "Send to server"
+                    }
+                )
+            }
         }
         item {
             HistorySectionHeader(history, onClearHistory)
@@ -151,6 +217,8 @@ private fun StatusCard(
     serverClientCount: Int,
     transport: String?,
     isServer: Boolean,
+    isWifiDirect: Boolean,
+    wifiDirectWaiting: Boolean,
     onToggle: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -160,7 +228,7 @@ private fun StatusCard(
                     Modifier
                         .size(12.dp)
                         .background(
-                            if (connected || (isServer && running)) Color(0xFF2E7D32)
+                            if (connected || ((isServer || (isWifiDirect && wifiDirectWaiting)) && running)) Color(0xFF2E7D32)
                             else if (running) Color(0xFFF9A825)
                             else Color(0xFF9E9E9E),
                             CircleShape
@@ -169,21 +237,33 @@ private fun StatusCard(
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(status, style = MaterialTheme.typography.titleMedium)
-                    if (isServer) {
-                        Text(
+                    when {
+                        isServer -> Text(
                             if (running) "$serverClientCount client${if (serverClientCount == 1) "" else "s"} connected"
                             else "Not running",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                    } else if (serverName != null) {
-                        Text(
+                        isWifiDirect && connected && serverName != null -> Text(
+                            "Syncing with $serverName (wifi_direct)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        isWifiDirect && running -> Text(
+                            if (serverClientCount > 0) {
+                                "$serverClientCount device${if (serverClientCount == 1) "" else "s"} connected"
+                            } else {
+                                "Waiting for nearby devices"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        serverName != null -> Text(
                             "Syncing with $serverName${transport?.let { " ($it)" } ?: ""}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                    } else {
-                        Text(
+                        else -> Text(
                             if (running) "Watching clipboard while app is open" else "Not syncing",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -197,7 +277,7 @@ private fun StatusCard(
                     modifier = Modifier.testTag("sync_switch"),
                 )
             }
-            if (starting || stopping || (running && !connected && !isServer)) {
+            if (starting || stopping || (running && !connected && !isServer && !isWifiDirect)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(top = 12.dp),
@@ -263,6 +343,45 @@ private fun DeviceRow(
             } else {
                 Text("Connect", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
+        }
+    }
+}
+
+@Composable
+private fun WifiDirectDeviceRow(
+    peer: WifiDirectPeer,
+    connected: Boolean,
+    onConnect: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (connected) Modifier else Modifier.clickable { onConnect() }),
+        colors = CardDefaults.cardColors(
+            containerColor = if (connected)
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+            else
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(peer.name, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Wi-Fi Direct · mTLS",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                if (connected) "Connected" else "Connect",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (connected) FontWeight.SemiBold else FontWeight.Normal,
+                color = MaterialTheme.colorScheme.primary,
+            )
         }
     }
 }

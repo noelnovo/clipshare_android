@@ -18,6 +18,7 @@ object Prefs {
 
     const val APP_MODE_CLIENT = "client"
     const val APP_MODE_SERVER = "server"
+    const val APP_MODE_WIFI_DIRECT = "wifi_direct"
 
     /** Wi-Fi Direct role: join a Windows group owner as a P2P client. */
     const val WIFI_DIRECT_ROLE_CONNECT = "connect"
@@ -56,6 +57,9 @@ object Prefs {
     private const val KEY_WIFI_DIRECT = "wifi_direct_enabled"
     private const val KEY_WIFI_DIRECT_PEER_NAME = "wifi_direct_peer_name"
     private const val KEY_WIFI_DIRECT_ROLE = "wifi_direct_role"
+    private const val KEY_WIFI_DIRECT_AUTO_CONNECT = "wifi_direct_auto_connect"
+    private const val KEY_WIFI_DIRECT_LAST_PEER_NAME = "wifi_direct_last_peer_name"
+    private const val KEY_WIFI_DIRECT_LAST_PEER_ADDRESS = "wifi_direct_last_peer_address"
 
 
     private fun prefs(ctx: Context) =
@@ -64,8 +68,10 @@ object Prefs {
     fun deviceName(ctx: Context): String =
         prefs(ctx).getString(KEY_DEVICE_NAME, Build.MODEL) ?: Build.MODEL
 
-    fun appMode(ctx: Context): String =
-        prefs(ctx).getString(KEY_APP_MODE, APP_MODE_CLIENT) ?: APP_MODE_CLIENT
+    fun appMode(ctx: Context): String {
+        val value = prefs(ctx).getString(KEY_APP_MODE, APP_MODE_CLIENT) ?: APP_MODE_CLIENT
+        return if (value == APP_MODE_SERVER || value == APP_MODE_WIFI_DIRECT) value else APP_MODE_CLIENT
+    }
 
     fun serverHost(ctx: Context): String =
         prefs(ctx).getString(KEY_SERVER_HOST, "") ?: ""
@@ -134,6 +140,16 @@ object Prefs {
         return if (value == WIFI_DIRECT_ROLE_HOST) WIFI_DIRECT_ROLE_HOST else WIFI_DIRECT_ROLE_CONNECT
     }
 
+    /** Reconnect to the last successfully used Wi-Fi Direct peer automatically. */
+    fun wifiDirectAutoConnect(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_WIFI_DIRECT_AUTO_CONNECT, true)
+
+    fun wifiDirectLastPeerName(ctx: Context): String =
+        prefs(ctx).getString(KEY_WIFI_DIRECT_LAST_PEER_NAME, "") ?: ""
+
+    fun wifiDirectLastPeerAddress(ctx: Context): String =
+        prefs(ctx).getString(KEY_WIFI_DIRECT_LAST_PEER_ADDRESS, "") ?: ""
+
 
     fun whitelist(ctx: Context): List<WhitelistEntry> {
         val raw = prefs(ctx).getString(KEY_WHITELIST, null) ?: return emptyList()
@@ -145,8 +161,16 @@ object Prefs {
     fun setDeviceName(ctx: Context, value: String) =
         prefs(ctx).edit().putString(KEY_DEVICE_NAME, value).apply()
 
-    fun setAppMode(ctx: Context, value: String) =
-        prefs(ctx).edit().putString(KEY_APP_MODE, value).apply()
+    fun setAppMode(ctx: Context, value: String) {
+        val mode = when (value) {
+            APP_MODE_SERVER, APP_MODE_WIFI_DIRECT -> value
+            else -> APP_MODE_CLIENT
+        }
+        prefs(ctx).edit()
+            .putString(KEY_APP_MODE, mode)
+            .putBoolean(KEY_WIFI_DIRECT, mode == APP_MODE_WIFI_DIRECT)
+            .apply()
+    }
 
     fun setServerHost(ctx: Context, value: String) =
         prefs(ctx).edit().putString(KEY_SERVER_HOST, value.trim()).apply()
@@ -219,6 +243,21 @@ object Prefs {
 
     fun setWifiDirectPeerName(ctx: Context, value: String) =
         prefs(ctx).edit().putString(KEY_WIFI_DIRECT_PEER_NAME, value.trim()).apply()
+
+    fun setWifiDirectAutoConnect(ctx: Context, value: Boolean) =
+        prefs(ctx).edit().putBoolean(KEY_WIFI_DIRECT_AUTO_CONNECT, value).apply()
+
+    fun setWifiDirectLastPeer(ctx: Context, name: String, address: String) =
+        prefs(ctx).edit()
+            .putString(KEY_WIFI_DIRECT_LAST_PEER_NAME, name.trim())
+            .putString(KEY_WIFI_DIRECT_LAST_PEER_ADDRESS, address.trim())
+            .apply()
+
+    fun clearWifiDirectLastPeer(ctx: Context) =
+        prefs(ctx).edit()
+            .remove(KEY_WIFI_DIRECT_LAST_PEER_NAME)
+            .remove(KEY_WIFI_DIRECT_LAST_PEER_ADDRESS)
+            .apply()
 
     fun setWhitelist(ctx: Context, entries: List<WhitelistEntry>) {
         prefs(ctx).edit().putString(

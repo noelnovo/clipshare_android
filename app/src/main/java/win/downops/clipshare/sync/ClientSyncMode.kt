@@ -9,6 +9,7 @@ import win.downops.clipshare.discover.WifiDirectPolicy
 import win.downops.clipshare.logs.Log
 import win.downops.clipshare.settings.Prefs
 import win.downops.clipshare.state.AppState
+import win.downops.clipshare.state.WifiDirectPeer
 import win.downops.clipshare.util.Constants
 import win.downops.clipshare.util.HostUtil
 import win.downops.clipshare.ws.Protocol
@@ -27,6 +28,9 @@ import kotlinx.coroutines.launch
 class ClientSyncMode(
     private val context: Context,
     private val events: SyncEvents,
+    private val wifiDirectOnly: Boolean = false,
+    private val targetPeer: WifiDirectPeer? = null,
+    private val onP2PFailed: (() -> Unit)? = null,
 ) : SyncMode {
 
     private var ws: WsClient? = null
@@ -37,6 +41,8 @@ class ClientSyncMode(
 
     @Volatile
     private var running = false
+
+    private var p2pFailures = 0
 
     /** The daemon we are currently (or last) targeting. */
     @Volatile
@@ -72,7 +78,7 @@ class ClientSyncMode(
     override fun start() {
         running = true
         startDiscovery()
-        connect()
+        if (!wifiDirectOnly) connect()
     }
 
     override fun stop() {
@@ -95,26 +101,9 @@ class ClientSyncMode(
     // ------------------------------------------------------------------
 
     private fun startDiscovery() {
-        if (SyncPlan.forContext(context).wifiDirectConnect) {
-            val hasClientCert = CertStore.clientTlsWithCert(context) != null
-            val refusal = WifiDirectPolicy.canStartClient(Prefs.tlsEnabled(context), hasClientCert)
-            if (refusal != null) {
-                Log.w("SyncService", "$refusal; P2P discovery skipped")
-                AppState.onError(refusal)
-                events.updateNotification(refusal)
-            } else {
-                val p2p = WifiDirectManager(
-                    context = context,
-                    onEndpoint = { name, host, port, tls, network ->
-                        onDeviceFound(name, host, port, tls, WifiDirectPolicy.TRANSPORT_WIFI_DIRECT, network)
-                    },
-                    peerName = Prefs.wifiDirectPeerName(context),
-                    fallbackPort = Prefs.serverPort(context),
-                    fallbackTls = true,
-                )
-                wifiDirect = p2p
-                p2p.startClient()
-            }
+        if (wifiDirectOnly) {
+            startWifiDirectClient()
+            return
         }
         if (Prefs.connectionMode(context) == Prefs.MODE_WHITELIST) {
             Log.i("SyncService", "discovery skipped: whitelist mode")
@@ -133,6 +122,34 @@ class ClientSyncMode(
         }
         discovery = d
         d.start()
+    }
+
+    /** Wi-Fi Direct client state: join the peer selected from the nearby list. */
+    private fun startWifiDirectClient() {
+        val hasClientCert = CertStore.clientTlsWithCert(context) != null
+        val refusal = WifiDirectPolicy.canStartClient(tlsEnabled = true, hasClientCert = hasClientCert)
+        if (refusal != null) {
+            Log.w("SyncService", "$refusal; Wi-Fi Direct connection skipped")
+            AppState.onWifiDirectFailed(refusal)
+            events.updateNotification(refusal)
+            onP2PFailed?.invoke()
+            return
+        }
+        AppState.onWifiDirectConnecting(targetPeer?.name.orEmpty().ifBlank { "device" })
+        val p2p = WifiDirectManager(
+            context = context,
+            onEndpoint = { name, host, port, tls, network ->
+                onDeviceFound(name, host, port, tls, WifiDirectPolicy.TRANSPORT_WIFI_DIRECT, network)
+            },
+            peerName = targetPeer?.name.orEmpty(),
+            peerAddress = targetPeer?.address.orEmpty(),
+            fallbackPort = Prefs.serverPort(context),
+            fallbackTls = true,
+            onState = { state -> Log.i("SyncService", "wifi direct: $state") },
+            onPeerList = { peers -> AppState.setWifiDirectPeers(peers) },
+        )
+        wifiDirect = p2p
+        p2p.startClient()
     }
 
     /** Called from the discovery threads whenever a daemon announces itself. */
@@ -170,6 +187,7 @@ class ClientSyncMode(
     }
 
     override fun switchTo(host: String, port: Int, tls: Boolean) {
+        if (wifiDirectOnly) return
         // Device taps are ephemeral and never rewrite the manual host field.
         manualActive = false
         connectTo(host, port, tls, verifyName = false, persist = false, transport = "manual")
@@ -180,6 +198,7 @@ class ClientSyncMode(
     // ------------------------------------------------------------------
 
     private fun connect() {
+        if (wifiDirectOnly) return
         if (Prefs.connectionMode(context) == Prefs.MODE_WHITELIST) {
             startWhitelistConnections()
             return
@@ -300,6 +319,14 @@ class ClientSyncMode(
                     Log.w("SyncService", "name $name rejected by whitelist")
                     rejectCurrent()
                 } else {
+                    p2pFailures = 0
+                    if (currentTransport == WifiDirectPolicy.TRANSPORT_WIFI_DIRECT) {
+                        Prefs.setWifiDirectLastPeer(
+                            context,
+                            targetPeer?.name.orEmpty().ifBlank { name },
+                            targetPeer?.address.orEmpty(),
+                        )
+                    }
                     AppState.onConnected(name, host, currentTransport)
                     events.updateNotification("Connected to $host")
                 }
@@ -376,6 +403,14 @@ class ClientSyncMode(
 
     /** Advances to the next whitelist candidate after a failed attempt. */
     private fun onConnectFailed() {
+        if (wifiDirectOnly) {
+            p2pFailures++
+            if (p2pFailures >= P2P_MAX_FAILURES) {
+                Log.w("SyncService", "Wi-Fi Direct peer unreachable after $p2pFailures attempts")
+                onP2PFailed?.invoke()
+            }
+            return
+        }
         if (Prefs.connectionMode(context) != Prefs.MODE_WHITELIST) return
         if (whitelistCandidates.isEmpty()) return
         stopWs()
@@ -383,6 +418,10 @@ class ClientSyncMode(
             delay(Constants.Whitelist.RETRY_DELAY_MS)
             if (running) connectToCandidate()
         }
+    }
+
+    private companion object {
+        const val P2P_MAX_FAILURES = 5
     }
 
     private fun whitelistNameMatches(name: String): Boolean {

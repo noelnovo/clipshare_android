@@ -152,6 +152,6 @@ object Constants {
     }
 
     object App {
-        const val VERSION = "1.1.6"
+        const val VERSION = "1.2.0"
     }
 }

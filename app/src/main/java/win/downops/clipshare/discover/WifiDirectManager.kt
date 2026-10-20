@@ -29,6 +29,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import win.downops.clipshare.logs.Log
+import win.downops.clipshare.state.WifiDirectPeer
 import win.downops.clipshare.util.Constants
 import java.net.InetAddress
 
@@ -43,6 +44,8 @@ class WifiDirectManager(
     private val fallbackPort: Int = Constants.Discovery.DEFAULT_SERVER_PORT,
     private val fallbackTls: Boolean = false,
     private val onState: (String) -> Unit = {},
+    private val onPeerList: (List<WifiDirectPeer>) -> Unit = {},
+    private val peerAddress: String = "",
 ) {
     private val manager = context.getSystemService(Context.WIFI_P2P_SERVICE) as WifiP2pManager
     private var channel: WifiP2pManager.Channel? = null
@@ -92,10 +95,34 @@ class WifiDirectManager(
             Constants.Discovery.SERVICE_TYPE,
             record,
         )
+        // A previous session may have left a group behind (for example, after
+        // an app update kills the process). createGroup then fails with BUSY.
+        // Remove it first, then advertise and create the new group.
+        manager.cancelConnect(ch, null)
+        manager.removeGroup(ch, object : WifiP2pManager.ActionListener {
+            override fun onSuccess() = advertiseServiceAndCreateGroup(ch, info)
+            override fun onFailure(reason: Int) = advertiseServiceAndCreateGroup(ch, info)
+        })
+    }
+
+    private fun advertiseServiceAndCreateGroup(
+        ch: WifiP2pManager.Channel,
+        info: WifiP2pDnsSdServiceInfo,
+    ) {
         manager.addLocalService(ch, info, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 onState("P2P service advertised")
-                manager.createGroup(ch, action("P2P group ready", "P2P group creation failed"))
+                manager.createGroup(ch, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() {
+                        onState("Waiting for nearby devices")
+                        startHostDiscovery()
+                    }
+
+                    override fun onFailure(reason: Int) {
+                        Log.w("WifiDirectManager", "P2P group creation failed: $reason")
+                        onState("P2P group creation failed")
+                    }
+                })
             }
 
             override fun onFailure(reason: Int) {
@@ -121,7 +148,12 @@ class WifiDirectManager(
             WifiP2pManager.DnsSdServiceResponseListener { _, registrationType, device ->
                 if (registrationType == Constants.Discovery.SERVICE_TYPE) {
                     target = device
+                    targetEndpointReady = true
+                    targetName = device.deviceName
+                    targetPort = fallbackPort
+                    targetTls = fallbackTls
                     onState("Wi-Fi Direct device found")
+                    requestPeers()
                 }
             },
             WifiP2pManager.DnsSdTxtRecordListener { _, record, device ->
@@ -163,6 +195,8 @@ class WifiDirectManager(
     fun stop() {
         running = false
         handler.removeCallbacks(peerFallback)
+        handler.removeCallbacks(peerRefresh)
+        onPeerList(emptyList())
         scope.cancel()
         receiver?.let { runCatching { context.unregisterReceiver(it) } }
         receiver = null
@@ -289,10 +323,13 @@ class WifiDirectManager(
 
     private fun requestPeers() {
         val ch = channel ?: return
-        if (!running || serverMode || connecting) return
+        if (!running || connecting) return
         if (!hasPermission()) return
         manager.requestPeers(ch) { peers: WifiP2pDeviceList ->
             if (!running || connecting) return@requestPeers
+            publishPeers(peers)
+            if (serverMode) return@requestPeers
+
             val currentTarget = target
             if (currentTarget != null) {
                 if (!targetEndpointReady) return@requestPeers
@@ -312,15 +349,20 @@ class WifiDirectManager(
                 }
                 return@requestPeers
             }
+
             val expected = peerName.trim()
             val selectedName = selectPeerName(peers.deviceList.map { it.deviceName }, expected)
-            if (selectedName == null) {
-                if (expected.isBlank() && peers.deviceList.size > 1) {
-                    onState("Multiple Wi-Fi Direct peers found; set the Windows peer name to choose one")
+            val device = if (peerAddress.isNotBlank()) {
+                peers.deviceList.firstOrNull { it.deviceAddress.equals(peerAddress, ignoreCase = true) }
+            } else {
+                selectedName?.let { name -> peers.deviceList.firstOrNull { it.deviceName == name } }
+            }
+            if (device == null) {
+                if (expected.isBlank() && peerAddress.isBlank() && peers.deviceList.size > 1) {
+                    onState("Select a nearby device to connect")
                 }
                 return@requestPeers
             }
-            val device = peers.deviceList.firstOrNull { it.deviceName == selectedName } ?: return@requestPeers
             target = device
             targetEndpointReady = true
             targetName = device.deviceName
@@ -328,6 +370,64 @@ class WifiDirectManager(
             targetTls = fallbackTls
             onState("Wi-Fi Direct peer found: ${device.deviceName}")
             connectToTarget()
+        }
+    }
+
+    /** Publish the P2P peer list to the UI (host and client modes). */
+    private fun publishPeers(peers: WifiP2pDeviceList) {
+        val list = peers.deviceList
+            // Wi-Fi Direct category 3 = printer, 7 = display/TV. Those peers
+            // cannot speak the ClipShare protocol, so keep them out of the
+            // nearby list.
+            .filterNot { device ->
+                val category = device.primaryDeviceType.substringBefore('-').toIntOrNull()
+                category == 3 || category == 7
+            }
+            .map { device ->
+                WifiDirectPeer(
+                    name = device.deviceName.ifBlank { device.deviceAddress },
+                    address = device.deviceAddress,
+                    status = device.status,
+                    isGroupOwner = device.isGroupOwner,
+                )
+            }
+        onPeerList(list)
+    }
+
+    /** Host state: keep a P2P scan running so the user can pick a peer. */
+    private fun startHostDiscovery() {
+        val ch = channel ?: return
+        if (!running || !serverMode) return
+        handler.removeCallbacks(peerRefresh)
+        manager.discoverPeers(ch, object : WifiP2pManager.ActionListener {
+            override fun onSuccess() {
+                onState("Searching for nearby devices")
+                requestPeers()
+            }
+
+            override fun onFailure(reason: Int) {
+                Log.w("WifiDirectManager", "host peer discovery failed: $reason")
+                requestPeers()
+            }
+        })
+        handler.postDelayed(peerRefresh, PEER_REFRESH_MS)
+    }
+
+    private val peerRefresh = object : Runnable {
+        override fun run() {
+            if (!running || !serverMode) return
+            val ch = channel ?: return
+            manager.discoverPeers(ch, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    requestPeers()
+                }
+
+                override fun onFailure(reason: Int) {
+                    Log.d("WifiDirectManager", "host peer refresh failed: $reason")
+                    requestPeers()
+                }
+            })
+            handler.postDelayed(this, PEER_REFRESH_MS)
         }
     }
 
@@ -407,18 +507,6 @@ class WifiDirectManager(
         }
     }
 
-    private fun action(success: String, failure: String = success): WifiP2pManager.ActionListener =
-        object : WifiP2pManager.ActionListener {
-            override fun onSuccess() {
-                onState(success)
-            }
-
-            override fun onFailure(reason: Int) {
-                Log.w("WifiDirectManager", "$failure: $reason")
-                onState(failure)
-            }
-        }
-
     private fun hasPermission(): Boolean {
         val nearby = Build.VERSION.SDK_INT < 33 ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.NEARBY_WIFI_DEVICES) ==
@@ -431,6 +519,7 @@ class WifiDirectManager(
 
     companion object {
         private const val PEER_FALLBACK_DELAY_MS = 8_000L
+        private const val PEER_REFRESH_MS = 10_000L
         private const val PROBE_TIMEOUT_MS = 5_000
         private const val NETWORK_LOOKUP_ATTEMPTS = 20
         private const val NETWORK_LOOKUP_INTERVAL_MS = 250L

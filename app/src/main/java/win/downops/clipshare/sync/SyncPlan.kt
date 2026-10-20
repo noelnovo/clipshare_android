@@ -4,36 +4,28 @@ import android.content.Context
 import win.downops.clipshare.settings.Prefs
 
 /**
- * Decides which sync stacks run from the three independent settings: app mode,
- * Wi-Fi Direct enabled, and Wi-Fi Direct role. Pure so it can be unit tested.
+ * Decides which sync stack runs from the single app-mode setting.
  *
- * - Wi-Fi Direct *host* hosts a group, so the server must run (it is the group's
- *   WebSocket endpoint). This is the only way Wi-Fi Direct starts server mode.
- * - Wi-Fi Direct *connect* joins a Windows group owner as a client, so it runs
- *   on the client stack. Combined with server app mode it cannot run, and that
- *   conflict is reported instead of silently changing the mode.
+ * - Client: LAN client (discovery/manual/whitelist + WebSocket client).
+ * - Server: LAN server (WebSocket server + LAN advertisement).
+ * - Wi-Fi Direct: managed by [WifiDirectSyncMode], which starts in host/wait
+ *   state and switches to a P2P client only when the user selects a device.
+ *
+ * Kept as a small pure value object so the mode selection is unit-testable.
  */
 data class SyncPlan(
     val runServer: Boolean,
-    val wifiDirectHost: Boolean,
-    val wifiDirectConnect: Boolean,
-    val wifiDirectConnectBlocked: Boolean,
+    val runClient: Boolean,
+    val wifiDirect: Boolean,
 ) {
     companion object {
         /** The plan for the settings currently stored on this device. */
-        fun forContext(ctx: Context): SyncPlan =
-            resolve(Prefs.appMode(ctx), Prefs.wifiDirectEnabled(ctx), Prefs.wifiDirectRole(ctx))
+        fun forContext(ctx: Context): SyncPlan = resolve(Prefs.appMode(ctx))
 
-        fun resolve(appMode: String, wifiDirectEnabled: Boolean, wifiDirectRole: String): SyncPlan {
-            val hostsGroup = wifiDirectEnabled && wifiDirectRole == Prefs.WIFI_DIRECT_ROLE_HOST
-            val connectsGroup = wifiDirectEnabled && wifiDirectRole == Prefs.WIFI_DIRECT_ROLE_CONNECT
-            val runServer = appMode == Prefs.APP_MODE_SERVER || hostsGroup
-            return SyncPlan(
-                runServer = runServer,
-                wifiDirectHost = hostsGroup,
-                wifiDirectConnect = connectsGroup && !runServer,
-                wifiDirectConnectBlocked = connectsGroup && runServer,
-            )
+        fun resolve(appMode: String): SyncPlan = when (appMode) {
+            Prefs.APP_MODE_SERVER -> SyncPlan(runServer = true, runClient = false, wifiDirect = false)
+            Prefs.APP_MODE_WIFI_DIRECT -> SyncPlan(runServer = false, runClient = false, wifiDirect = true)
+            else -> SyncPlan(runServer = false, runClient = true, wifiDirect = false)
         }
     }
 }
