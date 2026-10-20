@@ -116,7 +116,7 @@ fun MainScreen(
                 if (isWifiDirect) {
                     if (wifiDirectPeers.isEmpty()) {
                         Text(
-                            "No nearby devices. Waiting for another ClipShare device with Wi-Fi Direct enabled.",
+                            "No nearby devices yet.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

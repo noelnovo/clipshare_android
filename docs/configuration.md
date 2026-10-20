@@ -72,8 +72,9 @@ there is no user-visible role switch.
 device. If the last peer is not visible, the app stays in host/wait state and shows the peer list.
 
 Wi-Fi Direct is always mutual TLS. There is no plaintext P2P option. To connect to another host,
-import that host's client secret (QR or `.p12`) under **Client secrets**. To let other devices
-connect to this phone, use **This device as host → Show client secret** or **Share client secret**.
+import its certificate/key bundle (QR or `.p12`) under **Trusted Certificates/Keys** and give it a
+name. Host identity sharing (**This device as host**) is available in **Server** mode; the
+Wi-Fi Direct host reuses the same certificate.
 The peer list hides Wi-Fi Direct printer/display categories that cannot speak ClipShare.
 
 > The host/wait state is useful for receiving data: leave the app running and another ClipShare
@@ -185,62 +186,36 @@ wants to connect over TLS must scan a fresh client-cert QR from this server's sc
 
 ## Wi-Fi Direct with mutual TLS
 
-Wi-Fi Direct supplies a direct WPA2-protected link; mTLS separately authenticates
-both ClipShare endpoints and encrypts the WebSocket traffic. The Android Client
-TLS switch is global, so enabling it also secures LAN connections from this
-client.
+Wi-Fi Direct is always mTLS. The app starts in host/wait state and lists nearby peers; tap one to
+connect. Host identity sharing is available in **Server** mode.
 
-### Android Client → Windows or Linux server
+### Android → Windows/Linux server
 
-1. On the Windows/Linux server, create a private CA once and issue the server
-   identity and a client identity for the Pixel. On Linux, run these commands
-   as the daemon user; on Windows, run them in a normal PowerShell session:
+1. On the server, create a CA, server identity, and client identity; share the client QR or `.p12`:
 
    ```sh
-   clipshare cert init                                  # skip if a CA already exists
+   clipshare cert init
    clipshare cert issue --name desktop --type server
    clipshare cert issue --name pixel-9 --type client
    clipshare cert qr --name pixel-9 --type client --out pixel-9-client.png
    ```
 
-   Keep the CA private key on the server. Share only the client-cert QR or
-   exported client `.p12` with the Pixel. The Windows installer creates these
-   artifacts on a fresh install; the QR is saved under
-   `%APPDATA%\clipshare\certs\android-client.png`.
-2. Enable `[tls].enabled = true` in the desktop daemon config and restart it.
-   For a dynamic Wi-Fi Direct group-owner address, set
-   `[tls].verify_hostname = false`; this still validates the certificate chain
-   against the CA. On Linux, first create the P2P group with the OS networking
-   tools; the daemon advertises on the resulting interface.
-3. On the Pixel, use **Settings → Client → Scan client secret** to scan the QR
-   (or **Select client secret** to import the `.p12`), enable **TLS (wss)** and
-   **Wi-Fi Direct**, leave the manual server host blank, and set the optional
-   Windows peer name only if multiple P2P peers are nearby.
+2. Enable `[wifi_direct] role = "host"` and `[tls] enabled = true`,
+   `verify_hostname = false` in the server config.
+3. On the Pixel, choose **App mode → Wi-Fi Direct**, import the bundle under
+   **Trusted Certificates/Keys** (give it a name), start sync, and tap the server in
+   **Nearby devices**.
 
-The server presents its server certificate and requires the Pixel's
-CA-signed client certificate. The Android client trusts the CA bundled with
-the imported credential and presents the client identity during the TLS
-handshake.
+### Android → Android
 
-### Android Client → Android Server
+1. On the host phone, use **Server** mode once and open
+   **Server → This device as host → Show client certificate/key QR**.
+2. On the client phone, choose **App mode → Wi-Fi Direct**, import that QR under
+   **Trusted Certificates/Keys**, start sync, and tap the host in **Nearby devices**.
+3. The host stays in Wi-Fi Direct mode and waits; the client connects and syncs both ways.
 
-1. Set one phone to **Server** mode, enable **Wi-Fi Direct** and **Server TLS**,
-   and save. The server generates its CA and server identity.
-2. On that server phone, open **Settings → Server → Show client secret**.
-3. On the other phone, select **Client** mode, enable **Wi-Fi Direct** and
-   **TLS (wss)**, then use **Scan client secret** to scan the server phone's QR.
-   Leave the manual server host blank and start sync.
-
-The QR contains a fresh client private key, a client certificate issued by the
-Android server's CA, and that CA certificate. The server accepts only clients
-issued by its own CA. Regenerating the Android server's CA requires issuing and
-sharing new client credentials.
-
-> **Plaintext policy status:** TLS-enabled servers already reject clients
-> without an acceptable client certificate. The Android client is being updated
-> to refuse Wi-Fi Direct endpoints that do not negotiate mTLS; until that
-> transport-specific guard is shipped, leave TLS enabled on both sides for
-> every Wi-Fi Direct session.
+The QR/`.p12` contains a client private key, client certificate, and the issuing CA. The server
+accepts only clients signed by its CA.
 
 ---
 

@@ -31,6 +31,8 @@ data class ClientCertInfo(
     val id: String,
     val caSubject: String,
     val fingerprint: String,
+    /** User-visible name, e.g. "Windows desktop" or "Pixel 9". Empty for old imports. */
+    val label: String = "",
 )
 
 /** Metadata for a trusted CA certificate. */
@@ -111,6 +113,16 @@ object CertStore {
     fun deleteClientCert(context: Context, id: String) {
         File(context.filesDir, "$CLIENT_CERTS_DIR/$id.p12").delete()
         saveClientCerts(context, clientCerts(context).filter { it.id != id })
+    }
+
+    /** Sets the user-visible name for an imported client bundle. */
+    fun setClientCertLabel(context: Context, id: String, label: String) {
+        saveClientCerts(
+            context,
+            clientCerts(context).map {
+                if (it.id == id) it.copy(label = label.trim()) else it
+            },
+        )
     }
 
     /** Deletes every stored client certificate bundle (private keys). */
@@ -424,6 +436,7 @@ object CertStore {
             id = it.optString("id"),
             caSubject = it.optString("caSubject"),
             fingerprint = it.optString("fingerprint"),
+            label = it.optString("label"),
         )
     }
 
@@ -440,6 +453,7 @@ object CertStore {
             obj.put("id", it.id)
                 .put("caSubject", it.caSubject)
                 .put("fingerprint", it.fingerprint)
+                .put("label", it.label)
         })
     }
 

@@ -96,6 +96,8 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
     var tlsEnabled by rememberSaveable { mutableStateOf(Prefs.tlsEnabled(context)) }
     var verifyHostname by rememberSaveable { mutableStateOf(Prefs.verifyHostname(context)) }
     val clientCerts = remember { mutableStateListOf<ClientCertInfo>().apply { addAll(CertStore.clientCerts(context)) } }
+    var certToName by remember { mutableStateOf<ClientCertInfo?>(null) }
+    var certNameDraft by rememberSaveable { mutableStateOf("") }
 
     // TLS: server
     var serverPort by rememberSaveable { mutableStateOf(Prefs.serverPort(context).toString()) }
@@ -121,14 +123,19 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
         ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri != null) {
+            val before = clientCerts.map { it.id }.toSet()
             val ok = CertStore.importClientP12(context, uri)
             if (ok) {
                 clientCerts.clear()
                 clientCerts.addAll(CertStore.clientCerts(context))
+                clientCerts.firstOrNull { it.id !in before }?.let { added ->
+                    certToName = added
+                    certNameDraft = added.label.ifBlank { defaultCertName(added) }
+                }
             }
             Toast.makeText(
                 context,
-                if (ok) "Certificate imported" else "Import failed",
+                if (ok) "Certificate/key imported" else "Import failed",
                 Toast.LENGTH_LONG,
             ).show()
         }
@@ -140,14 +147,19 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             val content = result.data?.getStringExtra("SCAN_RESULT")
             if (content != null) {
+                val before = clientCerts.map { it.id }.toSet()
                 val ok = CertStore.importFromQrContent(context, content)
                 if (ok) {
                     clientCerts.clear()
                     clientCerts.addAll(CertStore.clientCerts(context))
+                    clientCerts.firstOrNull { it.id !in before }?.let { added ->
+                        certToName = added
+                        certNameDraft = added.label.ifBlank { defaultCertName(added) }
+                    }
                 }
                 Toast.makeText(
                     context,
-                    if (ok) "Certificate imported from QR" else "QR code not recognized",
+                    if (ok) "Certificate/key imported from QR" else "QR code not recognized",
                     Toast.LENGTH_LONG,
                 ).show()
             }
@@ -386,6 +398,10 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                             clientCerts.clear()
                             clientCerts.addAll(CertStore.clientCerts(context))
                         },
+                        onRename = { cert ->
+                            certToName = cert
+                            certNameDraft = cert.label.ifBlank { defaultCertName(cert) }
+                        },
                         onPick = { clientCertPicker.launch("*/*") },
                         onScan = { qrScanner.launch(Intent(context, CaptureActivity::class.java)) },
                     )
@@ -408,6 +424,7 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                         onCheckedChange = { serverTls = it },
                         testTag = "server_tls",
                     )
+                    Text("This device as host", style = MaterialTheme.typography.titleSmall)
                     ServerIdentitySection(
                         status = serverCertStatus,
                         onRegenerate = {
@@ -424,19 +441,13 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                 if (appMode == Prefs.APP_MODE_WIFI_DIRECT) {
                     SettingsSectionTitle("Wi-Fi Direct")
                     Text(
-                        "The app starts by waiting for nearby devices. Pick a device on the main screen to connect, " +
-                            "or wait for another device to connect to this phone. Clipboard sync is bidirectional.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        "Wi-Fi Direct always uses mutual TLS. Plaintext P2P is refused.",
+                        "Waits for nearby devices. Tap one to connect; sync is bidirectional over mTLS.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     SwitchRow(
                         title = "Auto-connect",
-                        subtitle = "Reconnect to the last used Wi-Fi Direct device when it is nearby.",
+                        subtitle = "Reconnect to the last used device.",
                         checked = wifiDirectAutoConnect,
                         onCheckedChange = { wifiDirectAutoConnect = it },
                     )
@@ -456,7 +467,7 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                         ) { Text("Forget last device") }
                     } else {
                         Text(
-                            "No last device yet. The first device you connect to becomes the auto-connect target.",
+                            "No last device.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -468,20 +479,13 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
                             clientCerts.clear()
                             clientCerts.addAll(CertStore.clientCerts(context))
                         },
+                        onRename = { cert ->
+                            certToName = cert
+                            certNameDraft = cert.label.ifBlank { defaultCertName(cert) }
+                        },
                         onPick = { clientCertPicker.launch("*/*") },
                         onScan = { qrScanner.launch(Intent(context, CaptureActivity::class.java)) },
-                        emptyHint = "Import a client secret from another Wi-Fi Direct host before connecting to it.",
-                    )
-                    Text("This device as host", style = MaterialTheme.typography.titleSmall)
-                    ServerIdentitySection(
-                        status = serverCertStatus,
-                        onRegenerate = {
-                            ServerCertManager.generate(context, Prefs.deviceName(context))
-                            serverCertStatus = serverCertStatusText(context)
-                            Toast.makeText(context, "Host certificate regenerated", Toast.LENGTH_SHORT).show()
-                        },
-                        onShare = { shareServerBundle(context) },
-                        onShowQr = { showClientCertQr = true },
+                        emptyHint = "Import a host's certificate/key before connecting.",
                     )
                 }
             }
@@ -700,6 +704,46 @@ fun SettingsScreen(context: Context, onBack: () -> Unit, registerSave: (() -> Un
             },
         )
     }
+
+    certToName?.let { cert ->
+        AlertDialog(
+            onDismissRequest = { certToName = null },
+            title = { Text("Name this certificate/key") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Give this bundle a name so you know which host it belongs to.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedTextField(
+                        value = certNameDraft,
+                        onValueChange = { certNameDraft = it },
+                        label = { Text("Name") },
+                        placeholder = { Text("e.g. Windows desktop") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "CA: ${cert.caSubject.ifBlank { "unknown" }}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    CertStore.setClientCertLabel(context, cert.id, certNameDraft)
+                    clientCerts.clear()
+                    clientCerts.addAll(CertStore.clientCerts(context))
+                    certToName = null
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { certToName = null }) { Text("Skip") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -759,7 +803,7 @@ private fun ClientCertRetentionWarningDialog(context: Context, onDismiss: () -> 
         text = {
             Text(
                 "Server certificates were generated. This device is in server " +
-                    "mode, so its stored client secrets (private keys) will be " +
+                    "mode, so its stored client certificate/key bundles (private keys) will be " +
                     "removed on $expiryDate. Have clients scan a fresh " +
                     "certificate QR from this screen soon."
             )
@@ -774,13 +818,14 @@ private fun ClientCertRetentionWarningDialog(context: Context, onDismiss: () -> 
 private fun ClientSecretsSection(
     clientCerts: List<ClientCertInfo>,
     onDelete: (ClientCertInfo) -> Unit,
+    onRename: (ClientCertInfo) -> Unit,
     onPick: () -> Unit,
     onScan: () -> Unit,
     emptyHint: String? = null,
 ) {
-    Text("Client secrets", style = MaterialTheme.typography.titleSmall)
+    Text("Trusted Certificates/Keys", style = MaterialTheme.typography.titleSmall)
     Text(
-        "Used for mutual TLS. The certificate matching the host's CA is offered automatically.",
+        "A QR or .p12 bundle contains a client key, certificate and issuing CA. Name each one so you know its host.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -797,16 +842,27 @@ private fun ClientSecretsSection(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(cert.caSubject, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    cert.label.ifBlank { cert.caSubject.ifBlank { "Certificate" } },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (cert.label.isNotBlank()) {
+                    Text(
+                        cert.caSubject,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
+            TextButton(onClick = { onRename(cert) }) { Text("Rename") }
             IconButton(onClick = { onDelete(cert) }) { Text("\u2715") }
         }
     }
     OutlinedButton(onClick = onPick, modifier = Modifier.fillMaxWidth()) {
-        Text("Select client secret")
+        Text("Import certificate/key")
     }
     OutlinedButton(onClick = onScan, modifier = Modifier.fillMaxWidth()) {
-        Text("Scan client secret")
+        Text("Scan certificate/key QR")
     }
 }
 
@@ -826,11 +882,19 @@ private fun ServerIdentitySection(
         Text("Regenerate certificate")
     }
     OutlinedButton(onClick = onShare, modifier = Modifier.fillMaxWidth()) {
-        Text("Share client secret")
+        Text("Share client certificate/key")
     }
     OutlinedButton(onClick = onShowQr, modifier = Modifier.fillMaxWidth()) {
-        Text("Show client secret")
+        Text("Show client certificate/key QR")
     }
+}
+
+private fun defaultCertName(cert: ClientCertInfo): String {
+    val cn = cert.caSubject.split(",")
+        .firstOrNull { it.trim().startsWith("CN=", ignoreCase = true) }
+        ?.substringAfter("CN=")
+        ?.trim()
+    return cn?.takeIf { it.isNotBlank() } ?: cert.caSubject.ifBlank { "Certificate" }
 }
 
 private fun shareServerBundle(context: Context) {

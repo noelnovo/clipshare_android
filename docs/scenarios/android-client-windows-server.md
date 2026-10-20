@@ -7,8 +7,9 @@
    `[tls].enabled = true`, `[tls].verify_hostname = false`.
 2. Windows: issue `pixel-9 --type client`, export `.p12` + QR PNG.
 3. Pixel: choose **App mode → Wi-Fi Direct**.
-4. Import the Windows client secret with **Scan client secret** or
-   **Select client secret** under **Client secrets**.
+4. Import the Windows bundle with **Scan certificate/key QR** or
+   **Import certificate/key** under **Trusted Certificates/Keys**, then name it
+   (for example `Windows desktop`).
 5. Wi-Fi radio on, mobile data may stay on, no AP join needed. Start sync:
    the phone hosts/waits and lists `DESKTOP-...` under **Nearby devices**.
 6. Tap `DESKTOP-...` to connect, or let **Auto-connect** reconnect to the last
