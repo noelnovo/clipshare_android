@@ -118,6 +118,10 @@ class ClipShareAccessibilityService : AccessibilityService() {
     }
 
     private fun launchCaptureActivity() {
+        if (ClipboardReadActivity.active.get()) {
+            Log.d("Capture", "capture already running; skipping duplicate launch")
+            return
+        }
         try {
             val intent = Intent(this, ClipboardReadActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -131,6 +135,6 @@ class ClipShareAccessibilityService : AccessibilityService() {
 
     private companion object {
         const val SELECTION_STALE_MS = 60_000L
-        const val COPY_COOLDOWN_MS = 1_500L
+        const val COPY_COOLDOWN_MS = 2_500L
     }
 }

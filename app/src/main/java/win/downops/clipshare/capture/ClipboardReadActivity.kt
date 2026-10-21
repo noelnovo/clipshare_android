@@ -20,10 +20,17 @@ class ClipboardReadActivity : Activity() {
     private val handled = AtomicBoolean(false)
     private val handler = Handler(Looper.getMainLooper())
 
-    private val timeout = Runnable { finish() }
+    private val timeout = Runnable { finishWithoutAnimation() }
 
+    @Suppress("DEPRECATION")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        active.set(true)
+        // This activity only steals focus long enough to read the clipboard.
+        // Suppress its transition/dim so a background copy does not visually
+        // feel like a second copy.
+        overridePendingTransition(0, 0)
+        window?.setDimAmount(0f)
         // Safety net: never linger on screen if focus is not granted quickly.
         handler.postDelayed(timeout, 1500)
     }
@@ -49,11 +56,23 @@ class ClipboardReadActivity : Activity() {
         } else {
             Log.d("Capture", "clipboard empty, nothing to capture")
         }
+        finishWithoutAnimation()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun finishWithoutAnimation() {
+        overridePendingTransition(0, 0)
         finish()
     }
 
     override fun onDestroy() {
         handler.removeCallbacks(timeout)
+        active.set(false)
         super.onDestroy()
+    }
+
+    companion object {
+        /** True while a capture activity is already reading the clipboard. */
+        val active = AtomicBoolean(false)
     }
 }

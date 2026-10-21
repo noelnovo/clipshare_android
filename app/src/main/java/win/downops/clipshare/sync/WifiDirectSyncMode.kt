@@ -26,9 +26,28 @@ class WifiDirectSyncMode(
     private var client: ClientSyncMode? = null
     private var stopped = false
     private var autoConnectArmed = Prefs.wifiDirectAutoConnect(context)
+    private var lastPeers: List<WifiDirectPeer> = emptyList()
 
     override fun start() {
-        startHost()
+        // Reconnect straight to the remembered peer when possible. The old
+        // host-first flow created a group and tore it down a few seconds
+        // later, which often left Android's P2P interface in a bad state.
+        val lastAddress = Prefs.wifiDirectLastPeerAddress(context)
+        val lastName = Prefs.wifiDirectLastPeerName(context)
+        if (Prefs.wifiDirectAutoConnect(context) && lastAddress.isNotBlank()) {
+            autoConnectArmed = false
+            Log.i("SyncService", "wifi direct: auto-connecting to last peer $lastName")
+            connectToPeer(
+                WifiDirectPeer(
+                    name = lastName.ifBlank { lastAddress },
+                    address = lastAddress,
+                    status = 0,
+                    isGroupOwner = false,
+                ),
+            )
+        } else {
+            startHost()
+        }
     }
 
     private fun startHost() {
@@ -36,6 +55,7 @@ class WifiDirectSyncMode(
         stopClient()
         stopHost()
         AppState.onWifiDirectWaiting()
+        if (lastPeers.isNotEmpty()) AppState.setWifiDirectPeers(lastPeers)
         val h = ServerSyncMode(
             context = context,
             events = events,
@@ -48,6 +68,7 @@ class WifiDirectSyncMode(
     }
 
     private fun onPeers(peers: List<WifiDirectPeer>) {
+        if (peers.isNotEmpty()) lastPeers = peers
         AppState.setWifiDirectPeers(peers)
         if (!autoConnectArmed || !Prefs.wifiDirectAutoConnect(context)) return
         if (AppState.serverClientCount.value > 0) return
@@ -70,9 +91,12 @@ class WifiDirectSyncMode(
     fun connectToPeer(peer: WifiDirectPeer) {
         if (stopped) return
         autoConnectArmed = false
+        val keepPeers = AppState.wifiDirectPeers.value.ifEmpty { lastPeers }
         stopClient()
         stopHost()
         AppState.onWifiDirectConnecting(peer.name)
+        // Do not make the list vanish while the client negotiates the group.
+        AppState.setWifiDirectPeers(keepPeers)
         val c = ClientSyncMode(
             context = context,
             events = events,

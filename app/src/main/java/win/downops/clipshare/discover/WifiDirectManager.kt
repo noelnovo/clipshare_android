@@ -32,6 +32,8 @@ import win.downops.clipshare.logs.Log
 import win.downops.clipshare.state.WifiDirectPeer
 import win.downops.clipshare.util.Constants
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 
 /**
  * Owns the Android Wi-Fi P2P lifecycle used by ClipShare. P2P only provides an
@@ -67,10 +69,83 @@ class WifiDirectManager(
     private var endpointReported = false
     private var resolvingEndpoint = false
     private var connectionGeneration = 0
+    private var connectDeadlineMs = 0L
     private val handler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val peerFallback = Runnable {
+    private val peerFallback: Runnable = Runnable {
         if (running && !serverMode && !connecting) beginPeerDiscovery()
+    }
+
+    private val connectTimeout: Runnable = Runnable {
+        if (running && !serverMode && connecting) {
+            Log.w("WifiDirectManager", "P2P connect timed out; rescanning")
+            connecting = false
+            connectDeadlineMs = 0L
+            handler.removeCallbacks(pollConnectionInfo)
+            handler.removeCallbacks(fallbackProbe)
+            target = null
+            targetEndpointReady = false
+            resolvingEndpoint = false
+            beginPeerDiscovery()
+        }
+    }
+
+    /**
+     * Connection-info broadcasts are not always delivered when a group is
+     * reused, so poll while a connect is in flight. Without this the client can
+     * stay on "Connecting..." although Windows already accepted the group.
+     */
+    private val pollConnectionInfo: Runnable = object : Runnable {
+        override fun run() {
+            if (!running || serverMode || !connecting) return
+            requestConnectionInfo()
+            handler.postDelayed(this, CONNECT_POLL_MS)
+        }
+    }
+
+    /**
+     * Some Windows group-owner reconnections never surface a groupFormed=true
+     * callback even though the L2 link is up. Probe the standard Wi-Fi Direct
+     * group-owner addresses directly and finish the endpoint setup from there.
+     */
+    private val fallbackProbe: Runnable = object : Runnable {
+        override fun run() {
+            if (!running || serverMode || !connecting || endpointReported) return
+            val port = targetPort
+            val tls = targetTls
+            val name = targetName
+            scope.launch {
+                val hosts = listOf("192.168.137.1", "192.168.49.1")
+                for (host in hosts) {
+                    val reachable = withContext(Dispatchers.IO) {
+                        runCatching {
+                            Socket().use { socket ->
+                                socket.connect(InetSocketAddress(host, port), PROBE_TIMEOUT_MS)
+                            }
+                        }.isSuccess
+                    }
+                    if (!reachable) continue
+                    withContext(Dispatchers.Main) {
+                        if (!running || serverMode || !connecting || endpointReported) return@withContext
+                        endpointReported = true
+                        connecting = false
+                        connectDeadlineMs = 0L
+                        handler.removeCallbacks(connectTimeout)
+                        handler.removeCallbacks(pollConnectionInfo)
+                        handler.removeCallbacks(fallbackProbe)
+                        val network = findWiFiDirectNetwork(host)
+                        onState("Wi-Fi Direct connected")
+                        onEndpoint(name, host, port, tls, network)
+                    }
+                    return@launch
+                }
+                withContext(Dispatchers.Main) {
+                    if (running && connecting) {
+                        handler.postDelayed(fallbackProbe, FALLBACK_PROBE_INTERVAL_MS)
+                    }
+                }
+            }
+        }
     }
 
     fun startServer(name: String, port: Int, tls: Boolean) {
@@ -141,8 +216,21 @@ class WifiDirectManager(
         startCommon()
         val ch = channel ?: return
         // Drop any group left over from a previous session; a stale group keeps
-        // the P2P state machine busy and makes connect() fail with BUSY.
-        manager.removeGroup(ch, null)
+        // the P2P state machine busy and makes connect() fail with BUSY. Start
+        // discovery only after the group is actually gone.
+        manager.removeGroup(ch, object : WifiP2pManager.ActionListener {
+            override fun onSuccess() {
+                handler.postDelayed({ startClientDiscovery(ch) }, P2P_RESET_DELAY_MS)
+            }
+
+            override fun onFailure(reason: Int) {
+                handler.postDelayed({ startClientDiscovery(ch) }, P2P_RESET_DELAY_MS)
+            }
+        })
+    }
+
+    private fun startClientDiscovery(ch: WifiP2pManager.Channel) {
+        if (!running || serverMode) return
         manager.setDnsSdResponseListeners(
             ch,
             WifiP2pManager.DnsSdServiceResponseListener { _, registrationType, device ->
@@ -196,6 +284,10 @@ class WifiDirectManager(
         running = false
         handler.removeCallbacks(peerFallback)
         handler.removeCallbacks(peerRefresh)
+        handler.removeCallbacks(connectTimeout)
+        handler.removeCallbacks(pollConnectionInfo)
+        handler.removeCallbacks(fallbackProbe)
+        connectDeadlineMs = 0L
         onPeerList(emptyList())
         scope.cancel()
         receiver?.let { runCatching { context.unregisterReceiver(it) } }
@@ -245,6 +337,13 @@ class WifiDirectManager(
         val device = target ?: return
         if (!hasPermission() || connecting) return
         connecting = true
+        connectDeadlineMs = System.currentTimeMillis() + CONNECT_TIMEOUT_MS
+        handler.removeCallbacks(connectTimeout)
+        handler.postDelayed(connectTimeout, CONNECT_TIMEOUT_MS)
+        handler.removeCallbacks(pollConnectionInfo)
+        handler.postDelayed(pollConnectionInfo, CONNECT_POLL_MS)
+        handler.removeCallbacks(fallbackProbe)
+        handler.postDelayed(fallbackProbe, FALLBACK_PROBE_DELAY_MS)
         // WifiP2pConfig.Builder is API 29+. The app supports API 26, so use the
         // legacy configuration object to keep P2P available on older devices.
         val config = WifiP2pConfig().apply {
@@ -268,6 +367,10 @@ class WifiDirectManager(
     private fun issueConnect(ch: WifiP2pManager.Channel, config: WifiP2pConfig) {
         if (!running) {
             connecting = false
+            connectDeadlineMs = 0L
+            handler.removeCallbacks(connectTimeout)
+            handler.removeCallbacks(pollConnectionInfo)
+            handler.removeCallbacks(fallbackProbe)
             return
         }
         manager.connect(ch, config, object : WifiP2pManager.ActionListener {
@@ -277,6 +380,10 @@ class WifiDirectManager(
 
             override fun onFailure(reason: Int) {
                 connecting = false
+                connectDeadlineMs = 0L
+                handler.removeCallbacks(connectTimeout)
+                handler.removeCallbacks(pollConnectionInfo)
+                handler.removeCallbacks(fallbackProbe)
                 targetEndpointReady = false
                 Log.w("WifiDirectManager", "P2P connection failed: $reason")
                 onState("P2P connection failed")
@@ -399,6 +506,8 @@ class WifiDirectManager(
         val ch = channel ?: return
         if (!running || !serverMode) return
         handler.removeCallbacks(peerRefresh)
+        // Use the cached peer list immediately, then refresh in the background.
+        requestPeers()
         manager.discoverPeers(ch, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 onState("Searching for nearby devices")
@@ -459,6 +568,10 @@ class WifiDirectManager(
                             if (!running || generation != connectionGeneration || endpointReported) return@withContext
                             endpointReported = true
                             connecting = false
+                            connectDeadlineMs = 0L
+                            handler.removeCallbacks(connectTimeout)
+                            handler.removeCallbacks(pollConnectionInfo)
+                            handler.removeCallbacks(fallbackProbe)
                             if (network == null) {
                                 Log.w("WifiDirectManager", "P2P network not found for $host; using system route")
                             }
@@ -467,9 +580,17 @@ class WifiDirectManager(
                     }
                 }
             } else if (running) {
+                // During negotiation Android emits connection-changed events
+                // with groupFormed=false. Do not tear down our own in-flight
+                // connect request; wait for the deadline/watchdog instead.
+                if (connecting && System.currentTimeMillis() < connectDeadlineMs) {
+                    return@requestConnectionInfo
+                }
                 connectionGeneration++
                 endpointReported = false
                 connecting = false
+                connectDeadlineMs = 0L
+                handler.removeCallbacks(connectTimeout)
                 target = null
                 targetEndpointReady = false
                 peerDiscoveryStarted = false
@@ -519,7 +640,17 @@ class WifiDirectManager(
 
     companion object {
         private const val PEER_FALLBACK_DELAY_MS = 8_000L
-        private const val PEER_REFRESH_MS = 10_000L
+        private const val PEER_REFRESH_MS = 3_000L
+        // Windows PBC pairing can take 25-35s on a fresh daemon. The old 30s
+        // watchdog cancelled the request just before pairing completed.
+        private const val CONNECT_TIMEOUT_MS = 75_000L
+        // Let WLAN AutoConfig recreate p2p-dev-wlan0 after removeGroup before
+        // issuing discovery/connect; otherwise Android can report "No such
+        // device" and stay in GroupCreatingState.
+        private const val P2P_RESET_DELAY_MS = 1_500L
+        private const val CONNECT_POLL_MS = 1_500L
+        private const val FALLBACK_PROBE_DELAY_MS = 5_000L
+        private const val FALLBACK_PROBE_INTERVAL_MS = 3_000L
         private const val PROBE_TIMEOUT_MS = 5_000
         private const val NETWORK_LOOKUP_ATTEMPTS = 20
         private const val NETWORK_LOOKUP_INTERVAL_MS = 250L

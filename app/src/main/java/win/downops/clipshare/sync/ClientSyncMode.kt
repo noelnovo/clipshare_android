@@ -146,7 +146,11 @@ class ClientSyncMode(
             fallbackPort = Prefs.serverPort(context),
             fallbackTls = true,
             onState = { state -> Log.i("SyncService", "wifi direct: $state") },
-            onPeerList = { peers -> AppState.setWifiDirectPeers(peers) },
+            onPeerList = { peers ->
+                // Keep the last list visible while the client negotiates the
+                // group; an empty scan result must not make the peer vanish.
+                if (peers.isNotEmpty()) AppState.setWifiDirectPeers(peers)
+            },
         )
         wifiDirect = p2p
         p2p.startClient()
