@@ -1,6 +1,7 @@
 package win.downops.clipshare.sync
 
 import android.content.Context
+import win.downops.clipshare.certs.CertStore
 import win.downops.clipshare.logs.Log
 import win.downops.clipshare.settings.Prefs
 import win.downops.clipshare.state.AppState
@@ -37,14 +38,15 @@ class WifiDirectSyncMode(
         if (Prefs.wifiDirectAutoConnect(context) && lastAddress.isNotBlank()) {
             autoConnectArmed = false
             Log.i("SyncService", "wifi direct: auto-connecting to last peer $lastName")
-            connectToPeer(
-                WifiDirectPeer(
-                    name = lastName.ifBlank { lastAddress },
-                    address = lastAddress,
-                    status = 0,
-                    isGroupOwner = false,
-                ),
+            val peer = WifiDirectPeer(
+                name = lastName.ifBlank { lastAddress },
+                address = lastAddress,
+                status = 0,
+                isGroupOwner = false,
             )
+            // If a certificate choice is needed, keep the service alive in
+            // host/wait state and let the dialog/notification ask for it.
+            if (!connectOrPrompt(peer)) startHost()
         } else {
             startHost()
         }
@@ -83,13 +85,68 @@ class WifiDirectSyncMode(
         if (peer != null) {
             autoConnectArmed = false
             Log.i("SyncService", "wifi direct: auto-connecting to last peer ${peer.name}")
-            connectToPeer(peer)
+            connectOrPrompt(peer)
         }
+    }
+
+    /**
+     * Makes sure a client certificate is pinned for this peer before starting
+     * the P2P client. If the user has several certificates and none is bound
+     * to this MAC, it asks the UI (foreground) or posts a notification (tile).
+     */
+    private fun ensureCertSelected(peer: WifiDirectPeer): Boolean {
+        val certs = CertStore.clientCerts(context)
+        if (certs.isEmpty()) {
+            val msg = "Wi-Fi Direct requires a client certificate. Import one in Settings."
+            Log.w("SyncService", "$msg (${peer.name})")
+            AppState.onWifiDirectFailed(msg)
+            events.updateNotification(msg)
+            return false
+        }
+
+        val selected = Prefs.wifiDirectCertId(context, peer.address, peer.name)
+        if (selected != null && certs.any { it.id == selected }) return true
+        if (selected != null) {
+            // Certificate was deleted; forget the stale binding.
+            Prefs.setWifiDirectCertId(context, peer.address, peer.name, null)
+        }
+
+        if (certs.size == 1) {
+            Prefs.setWifiDirectCertId(context, peer.address, peer.name, certs[0].id)
+            return true
+        }
+
+        Log.i("SyncService", "wifi direct: certificate selection needed for ${peer.name}")
+        AppState.onCertificateRequired(peer)
+        events.updateNotification("Choose a certificate for ${peer.name}")
+        if (!AppState.appInForeground) events.certificateRequired(peer)
+        return false
+    }
+
+    /** Returns true when a client connection was actually started. */
+    private fun connectOrPrompt(peer: WifiDirectPeer): Boolean {
+        if (!ensureCertSelected(peer)) return false
+        startClient(peer)
+        return true
     }
 
     /** Join the selected peer. The peer is the group owner for this session. */
     fun connectToPeer(peer: WifiDirectPeer) {
         if (stopped) return
+        // Taps can arrive repeatedly while the P2P group is forming. Restarting
+        // the client here removes the group that is about to complete, so keep
+        // the first request and ignore duplicates.
+        if (client != null && AppState.wifiDirectConnectingPeer.value != null) {
+            Log.i(
+                "SyncService",
+                "wifi direct: connect already in progress to ${AppState.wifiDirectConnectingPeer.value}",
+            )
+            return
+        }
+        connectOrPrompt(peer)
+    }
+
+    private fun startClient(peer: WifiDirectPeer) {
         autoConnectArmed = false
         val keepPeers = AppState.wifiDirectPeers.value.ifEmpty { lastPeers }
         stopClient()
@@ -112,11 +169,13 @@ class WifiDirectSyncMode(
     fun waitForPeers() {
         if (stopped) return
         autoConnectArmed = false
+        AppState.clearPendingCert()
         startHost()
     }
 
     override fun stop() {
         stopped = true
+        AppState.clearPendingCert()
         stopClient()
         stopHost()
         AppState.setWifiDirectPeers(emptyList())

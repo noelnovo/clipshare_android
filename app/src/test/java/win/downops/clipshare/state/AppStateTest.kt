@@ -126,6 +126,37 @@ class AppStateTest {
     }
 
     @Test
+    fun wifiDirectConnectingStateTracksPeerUntilConnected() {
+        AppState.onWifiDirectConnecting("backend")
+
+        assertEquals("backend", AppState.wifiDirectConnectingPeer.value)
+        assertEquals("Connecting to backend...", AppState.status.value)
+
+        AppState.onConnected("backend", "192.168.49.1", "wifi_direct")
+        assertNull(AppState.wifiDirectConnectingPeer.value)
+    }
+
+    @Test
+    fun certificateRequestSurvivesHostWaitingAndClearsExplicitly() {
+        val peer = WifiDirectPeer("backend", "4c:d5:77:2e:26:11", 0, isGroupOwner = false)
+
+        AppState.onWifiDirectWaiting()
+        AppState.onCertificateRequired(peer)
+
+        assertEquals(peer, AppState.pendingCertPeer.value)
+        assertEquals("Choose a certificate for backend", AppState.status.value)
+
+        // Starting the host after the prompt must not hide the prompt.
+        AppState.onWifiDirectWaiting()
+        assertEquals(peer, AppState.pendingCertPeer.value)
+        assertEquals("Choose a certificate for backend", AppState.status.value)
+
+        AppState.clearPendingCert()
+        assertNull(AppState.pendingCertPeer.value)
+        assertEquals("Waiting for nearby devices", AppState.status.value)
+    }
+
+    @Test
     fun onReceivedPrependsIncomingHistory() {
         AppState.onReceived(ctx, "hello from desktop", "desktop")
 

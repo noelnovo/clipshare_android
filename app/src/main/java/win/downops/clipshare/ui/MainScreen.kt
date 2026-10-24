@@ -23,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -32,9 +33,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import win.downops.clipshare.certs.CertStore
 import win.downops.clipshare.settings.Prefs
 import win.downops.clipshare.state.AppState
 import win.downops.clipshare.state.DiscoveredDevice
@@ -65,12 +68,15 @@ fun MainScreen(
     val devices by AppState.discovered.collectAsState()
     val wifiDirectPeers by AppState.wifiDirectPeers.collectAsState()
     val wifiDirectWaiting by AppState.wifiDirectWaiting.collectAsState()
+    val wifiDirectConnectingPeer by AppState.wifiDirectConnectingPeer.collectAsState()
     val history by AppState.history.collectAsState()
     val error by AppState.lastError.collectAsState()
 
     var text by remember { mutableStateOf("") }
     val isServer = appMode == Prefs.APP_MODE_SERVER
     val isWifiDirect = appMode == Prefs.APP_MODE_WIFI_DIRECT
+    val context = LocalContext.current
+    val availableCerts = CertStore.clientCerts(context)
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -91,6 +97,7 @@ fun MainScreen(
                 isServer = isServer,
                 isWifiDirect = isWifiDirect,
                 wifiDirectWaiting = wifiDirectWaiting,
+                wifiDirectConnectingPeer = wifiDirectConnectingPeer,
                 onToggle = onToggle,
             )
         }
@@ -122,10 +129,26 @@ fun MainScreen(
                         )
                     } else {
                         wifiDirectPeers.forEach { peer ->
+                            val selectedId = Prefs.wifiDirectCertId(context, peer.address, peer.name)
+                            val certLabel = selectedId
+                                ?.let { id -> availableCerts.firstOrNull { it.id == id } }
+                                ?.let { cert ->
+                                    cert.label.ifBlank {
+                                        cert.caSubject.ifBlank { "Certificate" }
+                                    }
+                                }
+                                ?: availableCerts.singleOrNull()?.let { cert ->
+                                    "Auto: " + cert.label.ifBlank {
+                                        cert.caSubject.ifBlank { "Certificate" }
+                                    }
+                                }
                             WifiDirectDeviceRow(
                                 peer = peer,
                                 connected = connected && peer.name == serverName,
+                                connecting = wifiDirectConnectingPeer == peer.name,
+                                certLabel = certLabel,
                                 onConnect = { onConnectWifiDirect(peer) },
+                                onChangeCert = { AppState.onCertificateRequired(peer) },
                             )
                         }
                     }
@@ -219,6 +242,7 @@ private fun StatusCard(
     isServer: Boolean,
     isWifiDirect: Boolean,
     wifiDirectWaiting: Boolean,
+    wifiDirectConnectingPeer: String?,
     onToggle: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -228,9 +252,12 @@ private fun StatusCard(
                     Modifier
                         .size(12.dp)
                         .background(
-                            if (connected || ((isServer || (isWifiDirect && wifiDirectWaiting)) && running)) Color(0xFF2E7D32)
-                            else if (running) Color(0xFFF9A825)
-                            else Color(0xFF9E9E9E),
+                            when {
+                                connected || (serverClientCount > 0 && (isServer || isWifiDirect)) ->
+                                    Color(0xFF2E7D32)
+                                running || starting || stopping -> Color(0xFFF9A825)
+                                else -> Color(0xFF9E9E9E)
+                            },
                             CircleShape
                         )
                 )
@@ -244,16 +271,22 @@ private fun StatusCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        isWifiDirect && wifiDirectConnectingPeer != null -> Text(
+                            "Connecting to $wifiDirectConnectingPeer…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         isWifiDirect && connected && serverName != null -> Text(
                             "Syncing with $serverName (wifi_direct)",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         isWifiDirect && running -> Text(
-                            if (serverClientCount > 0) {
-                                "$serverClientCount device${if (serverClientCount == 1) "" else "s"} connected"
-                            } else {
-                                "Waiting for nearby devices"
+                            when {
+                                serverClientCount > 0 ->
+                                    "$serverClientCount device${if (serverClientCount == 1) "" else "s"} connected"
+                                wifiDirectWaiting -> "Waiting for nearby devices"
+                                else -> "Starting Wi-Fi Direct..."
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -277,7 +310,8 @@ private fun StatusCard(
                     modifier = Modifier.testTag("sync_switch"),
                 )
             }
-            if (starting || stopping || (running && !connected && !isServer && !isWifiDirect)) {
+            if (starting || stopping || wifiDirectConnectingPeer != null ||
+                (running && !connected && !isServer && !isWifiDirect)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(top = 12.dp),
@@ -288,6 +322,7 @@ private fun StatusCard(
                         when {
                             starting -> "Starting service..."
                             stopping -> "Stopping service..."
+                            wifiDirectConnectingPeer != null -> "Connecting to $wifiDirectConnectingPeer..."
                             else -> "Connecting..."
                         },
                         style = MaterialTheme.typography.bodySmall
@@ -351,37 +386,67 @@ private fun DeviceRow(
 private fun WifiDirectDeviceRow(
     peer: WifiDirectPeer,
     connected: Boolean,
+    connecting: Boolean,
+    certLabel: String?,
     onConnect: () -> Unit,
+    onChangeCert: () -> Unit,
 ) {
+    val enabled = !connected && !connecting
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (connected) Modifier else Modifier.clickable { onConnect() }),
+            .then(if (enabled) Modifier.clickable { onConnect() } else Modifier),
         colors = CardDefaults.cardColors(
-            containerColor = if (connected)
+            containerColor = if (connected || connecting)
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
             else
                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
         ),
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(peer.name, style = MaterialTheme.typography.titleSmall)
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(peer.name, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "Wi-Fi Direct · mTLS",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                when {
+                    connecting -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Connecting…",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    connected -> Text(
+                        "Connected",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    else -> Text(
+                        "Connect",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Wi-Fi Direct · mTLS",
+                    "Certificate: ${certLabel ?: "not selected"}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
                 )
+                TextButton(onClick = onChangeCert, enabled = !connecting) {
+                    Text("Change")
+                }
             }
-            Text(
-                if (connected) "Connected" else "Connect",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = if (connected) FontWeight.SemiBold else FontWeight.Normal,
-                color = MaterialTheme.colorScheme.primary,
-            )
         }
     }
 }

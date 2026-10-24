@@ -126,7 +126,15 @@ object Constants {
 
     object Notification {
         const val CHANNEL_ID = "clipshare_sync"
+        const val CERT_CHANNEL_ID = "clipshare_cert"
         const val ID = 1
+        const val CERT_ID = 2
+    }
+
+    /** Intent extras used to open the certificate picker from a notification/tile. */
+    object Extras {
+        const val CERT_PEER_NAME = "win.downops.clipshare.extra.CERT_PEER_NAME"
+        const val CERT_PEER_ADDRESS = "win.downops.clipshare.extra.CERT_PEER_ADDRESS"
     }
 
     object Pkcs12 {

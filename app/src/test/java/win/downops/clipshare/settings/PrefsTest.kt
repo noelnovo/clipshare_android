@@ -3,6 +3,7 @@ package win.downops.clipshare.settings
 import android.content.Context
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -157,5 +158,36 @@ class PrefsTest {
             .edit().putString("whitelist", "not-json").commit()
 
         assertEquals(emptyList<WhitelistEntry>(), Prefs.whitelist(ctx))
+    }
+
+    @Test
+    fun wifiDirectCertBindingIsRememberedByMacAndName() {
+        Prefs.setWifiDirectCertId(ctx, "4C:D5:77:2E:26:11", "backend", "cert-arch")
+
+        assertEquals(
+            "cert-arch",
+            Prefs.wifiDirectCertId(ctx, "4c:d5:77:2e:26:11", "backend"),
+        )
+        // If the P2P MAC rotates, the device name is still a usable fallback.
+        assertEquals(
+            "cert-arch",
+            Prefs.wifiDirectCertId(ctx, "aa:bb:cc:dd:ee:ff", "backend"),
+        )
+
+        Prefs.setWifiDirectCertId(ctx, "4c:d5:77:2e:26:11", "backend", null)
+        assertNull(Prefs.wifiDirectCertId(ctx, "4c:d5:77:2e:26:11", "backend"))
+    }
+
+    @Test
+    fun deletingACertDropsEveryPeerBinding() {
+        Prefs.setWifiDirectCertId(ctx, "mac-1", "backend", "cert-arch")
+        Prefs.setWifiDirectCertId(ctx, "mac-2", "other", "cert-arch")
+        Prefs.setWifiDirectCertId(ctx, "mac-3", "keep", "cert-other")
+
+        Prefs.removeWifiDirectCertMappings(ctx, "cert-arch")
+
+        assertNull(Prefs.wifiDirectCertId(ctx, "mac-1", "backend"))
+        assertNull(Prefs.wifiDirectCertId(ctx, "mac-2", "other"))
+        assertEquals("cert-other", Prefs.wifiDirectCertId(ctx, "mac-3", "keep"))
     }
 }

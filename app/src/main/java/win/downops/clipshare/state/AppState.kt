@@ -78,6 +78,14 @@ object AppState {
     private val _wifiDirectWaiting = MutableStateFlow(false)
     val wifiDirectWaiting: StateFlow<Boolean> = _wifiDirectWaiting.asStateFlow()
 
+    /** Name of the peer currently being joined, for immediate UI feedback. */
+    private val _wifiDirectConnectingPeer = MutableStateFlow<String?>(null)
+    val wifiDirectConnectingPeer: StateFlow<String?> = _wifiDirectConnectingPeer.asStateFlow()
+
+    /** Peer waiting for the user to choose a client certificate. */
+    private val _pendingCertPeer = MutableStateFlow<WifiDirectPeer?>(null)
+    val pendingCertPeer: StateFlow<WifiDirectPeer?> = _pendingCertPeer.asStateFlow()
+
     @Volatile
     var service: SyncService? = null
         private set
@@ -124,6 +132,8 @@ object AppState {
         _transport.value = null
         _serverClientCount.value = 0
         _wifiDirectWaiting.value = false
+        _wifiDirectConnectingPeer.value = null
+        _pendingCertPeer.value = null
         _wifiDirectPeers.value = emptyList()
         Log.i("AppState", "stopSync")
         ctx.stopService(Intent(ctx, SyncService::class.java))
@@ -175,6 +185,8 @@ object AppState {
         _transport.value = null
         _serverClientCount.value = 0
         _wifiDirectWaiting.value = false
+        _wifiDirectConnectingPeer.value = null
+        _pendingCertPeer.value = null
         _wifiDirectPeers.value = emptyList()
         _status.value = "Stopped"
         Log.i("AppState", "service stopped")
@@ -197,6 +209,8 @@ object AppState {
         _serverName.value = name
         _connectedIp.value = host
         _transport.value = transport
+        _wifiDirectConnectingPeer.value = null
+        _pendingCertPeer.value = null
         _status.value = "Connected to $name"
         _lastError.value = null
         Log.i("AppState", "connected to $name at $host")
@@ -206,6 +220,7 @@ object AppState {
         _connected.value = false
         _serverName.value = null
         _transport.value = null
+        _wifiDirectConnectingPeer.value = null
         _status.value = if (reason.isNullOrBlank()) "Disconnected" else "Disconnected: $reason"
         Log.i("AppState", "disconnected: ${reason ?: "unknown"}")
     }
@@ -306,7 +321,13 @@ object AppState {
         _connectedIp.value = null
         _transport.value = "wifi_direct"
         _wifiDirectWaiting.value = true
-        _status.value = "Waiting for nearby devices"
+        _wifiDirectConnectingPeer.value = null
+        val pending = _pendingCertPeer.value
+        _status.value = if (pending != null) {
+            "Choose a certificate for ${pending.name}"
+        } else {
+            "Waiting for nearby devices"
+        }
         _lastError.value = null
         Log.i("AppState", "wifi direct waiting")
     }
@@ -318,16 +339,33 @@ object AppState {
         _connectedIp.value = null
         _transport.value = "wifi_direct"
         _wifiDirectWaiting.value = false
+        _wifiDirectConnectingPeer.value = peerName
         _status.value = "Connecting to $peerName..."
         Log.i("AppState", "wifi direct connecting to $peerName")
     }
 
     fun onWifiDirectFailed(message: String) {
         _wifiDirectWaiting.value = false
+        _wifiDirectConnectingPeer.value = null
         _connected.value = false
         _status.value = "Wi-Fi Direct: $message"
         _lastError.value = message
         Log.w("AppState", "wifi direct failed: $message")
+    }
+
+    /** A peer needs a client-certificate choice before it can be joined. */
+    fun onCertificateRequired(peer: WifiDirectPeer) {
+        _pendingCertPeer.value = peer
+        _wifiDirectConnectingPeer.value = null
+        _status.value = "Choose a certificate for ${peer.name}"
+        Log.i("AppState", "certificate required for ${peer.name} (${peer.address})")
+    }
+
+    fun clearPendingCert() {
+        _pendingCertPeer.value = null
+        if (_status.value.startsWith("Choose a certificate")) {
+            _status.value = if (_wifiDirectWaiting.value) "Waiting for nearby devices" else "Ready"
+        }
     }
 
     internal fun resetForTesting() {
@@ -346,6 +384,8 @@ object AppState {
         _discovered.value = emptyList()
         _wifiDirectPeers.value = emptyList()
         _wifiDirectWaiting.value = false
+        _wifiDirectConnectingPeer.value = null
+        _pendingCertPeer.value = null
         _accessibilityConnected.value = false
         service = null
         appInForeground = false

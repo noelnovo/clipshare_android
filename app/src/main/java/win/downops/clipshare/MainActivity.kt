@@ -1,6 +1,8 @@
 package win.downops.clipshare
 
 import android.Manifest
+import android.app.NotificationManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -20,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,16 +34,20 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
+import win.downops.clipshare.certs.CertStore
 import win.downops.clipshare.clipboard.ClipboardPusher
 import win.downops.clipshare.logs.Log
 import win.downops.clipshare.settings.Prefs
 import win.downops.clipshare.state.AppState
+import win.downops.clipshare.state.WifiDirectPeer
+import win.downops.clipshare.ui.CertificatePickerDialog
 import win.downops.clipshare.ui.NavSaveIcon
 import win.downops.clipshare.ui.navigation.AppBottomBar
 import win.downops.clipshare.ui.navigation.AppNavigationHost
 import win.downops.clipshare.ui.navigation.AppScreen
 import win.downops.clipshare.ui.navigation.index
 import win.downops.clipshare.ui.theme.ClipShareTheme
+import win.downops.clipshare.util.Constants
 
 class MainActivity : ComponentActivity() {
 
@@ -66,6 +73,7 @@ class MainActivity : ComponentActivity() {
         Log.i("MainActivity", "onCreate")
         AppState.loadHistory(this)
         AppState.setAppMode(Prefs.appMode(this))
+        handleCertIntent(intent)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
@@ -78,6 +86,29 @@ class MainActivity : ComponentActivity() {
                 ClipShareApp()
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleCertIntent(intent)
+    }
+
+    /** Opens the certificate picker when launched from the tile/notification. */
+    private fun handleCertIntent(intent: Intent?) {
+        val i = intent ?: return
+        val name = i.getStringExtra(Constants.Extras.CERT_PEER_NAME) ?: return
+        val address = i.getStringExtra(Constants.Extras.CERT_PEER_ADDRESS).orEmpty()
+        if (name.isBlank() && address.isBlank()) return
+        AppState.onCertificateRequired(
+            WifiDirectPeer(name.ifBlank { address }, address, 0, isGroupOwner = false),
+        )
+        i.removeExtra(Constants.Extras.CERT_PEER_NAME)
+        i.removeExtra(Constants.Extras.CERT_PEER_ADDRESS)
+    }
+
+    private fun cancelCertNotification() {
+        getSystemService(NotificationManager::class.java)?.cancel(Constants.Notification.CERT_ID)
     }
 
     private fun requestWifiDirectPermissions(): Boolean {
@@ -104,6 +135,7 @@ class MainActivity : ComponentActivity() {
         val pagerState = rememberPagerState(pageCount = { screens.size })
         val scope = rememberCoroutineScope()
         var saveSettings by remember { mutableStateOf<(() -> Unit)?>(null) }
+        val pendingCertPeer by AppState.pendingCertPeer.collectAsState()
 
         val currentPage = pagerState.currentPage.coerceAtMost(screens.lastIndex)
         val currentScreen = screens[currentPage]
@@ -164,7 +196,20 @@ class MainActivity : ComponentActivity() {
                     }
                 },
                 onConnectWifiDirect = { peer ->
-                    AppState.service?.connectToWifiDirectPeer(peer)
+                    val certs = CertStore.clientCerts(context)
+                    val selected = Prefs.wifiDirectCertId(context, peer.address, peer.name)
+                    val svc = AppState.service
+                    when {
+                        svc == null -> AppState.onError("Start sync first")
+                        certs.isEmpty() -> AppState.onError("No client certificate. Import one in Settings.")
+                        selected != null && certs.any { it.id == selected } ->
+                            svc.connectToWifiDirectPeer(peer)
+                        certs.size == 1 -> {
+                            Prefs.setWifiDirectCertId(context, peer.address, peer.name, certs[0].id)
+                            svc.connectToWifiDirectPeer(peer)
+                        }
+                        else -> AppState.onCertificateRequired(peer)
+                    }
                 },
                 onWaitForPeers = {
                     AppState.service?.waitForWifiDirectPeers()
@@ -180,6 +225,37 @@ class MainActivity : ComponentActivity() {
                 onClearHistory = { AppState.clearHistory(context) },
                 onSettingsBack = {
                     scope.launch { pagerState.animateScrollToPage(AppScreen.Main.index(logsEnabled)) }
+                },
+            )
+        }
+
+        // Global certificate picker: works from the main screen, a notification
+        // and the quick-settings tile, independent of the current page.
+        pendingCertPeer?.let { peer ->
+            CertificatePickerDialog(
+                peer = peer,
+                certs = CertStore.clientCerts(context),
+                selectedId = Prefs.wifiDirectCertId(context, peer.address, peer.name),
+                onSelect = { cert ->
+                    Prefs.setWifiDirectCertId(context, peer.address, peer.name, cert.id)
+                    AppState.clearPendingCert()
+                    cancelCertNotification()
+                    AppState.service?.connectToWifiDirectPeer(peer)
+                },
+                onDismiss = {
+                    AppState.clearPendingCert()
+                    cancelCertNotification()
+                    val svc = AppState.service
+                    if (svc != null && !AppState.wifiDirectWaiting.value && !AppState.connected.value) {
+                        svc.waitForWifiDirectPeers()
+                    }
+                },
+                onOpenSettings = {
+                    AppState.clearPendingCert()
+                    cancelCertNotification()
+                    scope.launch {
+                        pagerState.animateScrollToPage(AppScreen.Settings.index(logsEnabled))
+                    }
                 },
             )
         }

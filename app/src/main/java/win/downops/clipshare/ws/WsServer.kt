@@ -55,7 +55,6 @@ class WsServer(
 
     fun start() {
         if (running) return
-        running = true
         Log.i("WsServer", "starting server on port $port (tls=${keyStore != null})")
 
         val env = applicationEngineEnvironment {
@@ -98,7 +97,33 @@ class WsServer(
         }
 
         // Netty is required: the CIO engine does not support HTTPS connectors.
-        server = embeddedServer(Netty, env).start(wait = false)
+        // Retry briefly if a previous instance is still releasing the port
+        // (rapid stop/start from the quick-settings tile).
+        var last: Exception? = null
+        for (attempt in 0 until 3) {
+            var engine: ApplicationEngine? = null
+            try {
+                engine = embeddedServer(Netty, env)
+                engine.start(wait = false)
+                server = engine
+                running = true
+                Log.i("WsServer", "server started on port $port")
+                return
+            } catch (e: Exception) {
+                last = e
+                runCatching { engine?.stop(0, 0) }
+                Log.w("WsServer", "server bind attempt ${attempt + 1} failed: ${e.message}")
+                if (attempt < 2) {
+                    try {
+                        Thread.sleep(300)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                    }
+                }
+            }
+        }
+        running = false
+        throw last ?: IllegalStateException("server failed to start on port $port")
     }
 
     fun stop() {

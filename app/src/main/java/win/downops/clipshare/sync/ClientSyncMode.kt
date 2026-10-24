@@ -126,7 +126,7 @@ class ClientSyncMode(
 
     /** Wi-Fi Direct client state: join the peer selected from the nearby list. */
     private fun startWifiDirectClient() {
-        val hasClientCert = CertStore.clientTlsWithCert(context) != null
+        val hasClientCert = CertStore.clientCerts(context).isNotEmpty()
         val refusal = WifiDirectPolicy.canStartClient(tlsEnabled = true, hasClientCert = hasClientCert)
         if (refusal != null) {
             Log.w("SyncService", "$refusal; Wi-Fi Direct connection skipped")
@@ -168,7 +168,7 @@ class ClientSyncMode(
         if (!running) return
         val isWifiDirect = WifiDirectPolicy.isWifiDirectEndpoint(host, source)
         if (isWifiDirect) {
-            val refusal = WifiDirectPolicy.refusalReason(tls, CertStore.clientTlsWithCert(context) != null)
+            val refusal = WifiDirectPolicy.refusalReason(tls, CertStore.clientCerts(context).isNotEmpty())
             if (refusal != null) {
                 Log.e("SyncService", "$refusal ($host:$port)")
                 AppState.onError(refusal)
@@ -234,7 +234,7 @@ class ClientSyncMode(
     ) {
         val isWifiDirect = WifiDirectPolicy.isWifiDirectEndpoint(host, transport)
         if (isWifiDirect) {
-            val refusal = WifiDirectPolicy.refusalReason(tls, CertStore.clientTlsWithCert(context) != null)
+            val refusal = WifiDirectPolicy.refusalReason(tls, CertStore.clientCerts(context).isNotEmpty())
             if (refusal != null) {
                 Log.e("SyncService", "$refusal ($host:$port)")
                 AppState.onError(refusal)
@@ -298,12 +298,32 @@ class ClientSyncMode(
         Log.i("SyncService", "opening $url")
 
         val tlsConfig = if (tls) {
-            val clientTls = CertStore.clientTlsWithCert(context) ?: CertStore.trustOnlyTls(context)
+            val certs = CertStore.clientCerts(context)
+            val peer = targetPeer
+            val selectedId = peer?.let { Prefs.wifiDirectCertId(context, it.address, it.name) }
+            val clientTls = when {
+                // A per-peer binding always wins: two desktops can have CAs
+                // with the same subject DN, so offering every certificate to
+                // the TLS stack can present the wrong one.
+                selectedId != null -> CertStore.clientTlsForCert(context, selectedId)
+                peer != null && certs.size > 1 -> null
+                peer != null -> CertStore.clientTlsWithCert(context)
+                else -> CertStore.clientTlsWithCert(context) ?: CertStore.trustOnlyTls(context)
+            }
             if (clientTls == null) {
-                val msg = "TLS on, but no client certificate or trusted CA imported"
+                val needsChoice = peer != null && certs.size > 1
+                val msg = when {
+                    needsChoice -> "Choose a client certificate for ${peer?.name}"
+                    peer != null -> "Wi-Fi Direct requires a client certificate"
+                    else -> "TLS on, but no client certificate or trusted CA imported"
+                }
                 Log.e("SyncService", msg)
                 AppState.onError(msg)
-                events.updateNotification("TLS on, but no certificate or CA imported")
+                events.updateNotification(msg)
+                if (peer != null) {
+                    AppState.onCertificateRequired(peer)
+                    events.certificateRequired(peer)
+                }
                 onConnectFailed()
                 return null
             }

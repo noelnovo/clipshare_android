@@ -102,6 +102,39 @@ class WsServerTest {
     }
 
     @Test
+    fun releasesThePortForANewServerAfterStop() {
+        val port = findFreePort()
+        val first = WsServer(
+            port = port,
+            bindHost = "127.0.0.1",
+            deviceName = "android-server",
+            keyStore = null,
+            keyStorePassword = null,
+            onReceived = { _, _ -> },
+            onClientChange = {},
+        )
+        first.start()
+        awaitListening(port)
+        first.stop()
+
+        val second = WsServer(
+            port = port,
+            bindHost = "127.0.0.1",
+            deviceName = "android-server",
+            keyStore = null,
+            keyStorePassword = null,
+            onReceived = { _, _ -> },
+            onClientChange = {},
+        )
+        try {
+            second.start()
+            awaitListening(port)
+        } finally {
+            second.stop()
+        }
+    }
+
+    @Test
     fun answersPingWithPong() {
         val port = findFreePort()
         val server = WsServer(port, "127.0.0.1", "android-server", null, null, onReceived = { _, _ -> }, onClientChange = {})

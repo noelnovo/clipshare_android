@@ -113,6 +113,7 @@ object CertStore {
     fun deleteClientCert(context: Context, id: String) {
         File(context.filesDir, "$CLIENT_CERTS_DIR/$id.p12").delete()
         saveClientCerts(context, clientCerts(context).filter { it.id != id })
+        Prefs.removeWifiDirectCertMappings(context, id)
     }
 
     /** Sets the user-visible name for an imported client bundle. */
@@ -127,8 +128,10 @@ object CertStore {
 
     /** Deletes every stored client certificate bundle (private keys). */
     fun deleteAllClientCerts(context: Context) {
+        val ids = clientCerts(context).map { it.id }
         File(context.filesDir, CLIENT_CERTS_DIR).listFiles()?.forEach { it.delete() }
         saveClientCerts(context, emptyList())
+        ids.forEach { Prefs.removeWifiDirectCertMappings(context, it) }
     }
 
     /**
@@ -152,8 +155,22 @@ object CertStore {
      * them, so the server can select the one signed by its own CA (required for
      * mutual TLS). Servers that do not require a client cert ignore them.
      */
-    fun clientTlsWithCert(context: Context): ClientTls? {
-        val certs = clientCerts(context)
+    fun clientTlsWithCert(context: Context): ClientTls? =
+        loadClientTls(context, clientCerts(context))
+
+    /**
+     * Builds a TLS context that presents only [certId]. This matters when two
+     * imported CAs share the same subject DN (e.g. two ClipShare desktops both
+     * called "clipshare-ca"): the TLS stack cannot tell them apart from the
+     * CertificateRequest alone, so the caller must pin the certificate.
+     */
+    fun clientTlsForCert(context: Context, certId: String?): ClientTls? {
+        if (certId.isNullOrBlank()) return clientTlsWithCert(context)
+        val cert = clientCerts(context).firstOrNull { it.id == certId } ?: return null
+        return loadClientTls(context, listOf(cert))
+    }
+
+    private fun loadClientTls(context: Context, certs: List<ClientCertInfo>): ClientTls? {
         val ks = KeyStore.getInstance("PKCS12").apply { load(null, null) }
         var loaded = 0
         certs.forEach { cert ->

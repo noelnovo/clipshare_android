@@ -8,9 +8,12 @@ import android.os.Build
 import android.os.IBinder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import win.downops.clipshare.certs.CertStore
 import win.downops.clipshare.logs.Log
 import win.downops.clipshare.settings.Prefs
@@ -29,6 +32,7 @@ import win.downops.clipshare.util.Constants
 class SyncService : Service() {
 
     private var mode: SyncMode? = null
+    private var startJob: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -58,7 +62,7 @@ class SyncService : Service() {
             else -> ClientSyncMode(this, events)
         }
         mode = m
-        scope.launch {
+        startJob = scope.launch {
             try {
                 m.start()
             } catch (e: Exception) {
@@ -72,7 +76,9 @@ class SyncService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i("SyncService", "onStartCommand")
         mode?.onStartCommand()
-        return START_STICKY
+        // Do not let the system restart a service whose listening socket may
+        // still be held by the previous instance; the UI/tile starts it again.
+        return START_NOT_STICKY
     }
 
     // ------------------------------------------------------------------
@@ -123,14 +129,22 @@ class SyncService : Service() {
     override fun onDestroy() {
         val m = mode
         mode = null
-        scope.launch {
-            try {
-                m?.stop()
-            } catch (e: Exception) {
-                Log.e("SyncService", "mode stop failed", e)
+
+        // Stop the mode before publishing "stopped". Previously the stop ran
+        // in a detached coroutine after onServiceStopped(), so a rapid tile
+        // toggle could start a new WsServer while the old socket still held
+        // :40403, producing "Address already in use".
+        if (m != null) {
+            runBlocking(Dispatchers.IO) {
+                startJob?.cancelAndJoin()
+                try {
+                    m.stop()
+                } catch (e: Exception) {
+                    Log.e("SyncService", "mode stop failed", e)
+                }
             }
-            scope.cancel()
         }
+        scope.cancel()
         AppState.onServiceStopped()
         Log.i("SyncService", "onDestroy")
         super.onDestroy()

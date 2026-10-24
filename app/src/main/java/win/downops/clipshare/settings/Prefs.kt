@@ -2,6 +2,7 @@ package win.downops.clipshare.settings
 
 import android.content.Context
 import android.os.Build
+import org.json.JSONObject
 import win.downops.clipshare.util.Constants
 import win.downops.clipshare.util.JsonList
 
@@ -60,6 +61,7 @@ object Prefs {
     private const val KEY_WIFI_DIRECT_AUTO_CONNECT = "wifi_direct_auto_connect"
     private const val KEY_WIFI_DIRECT_LAST_PEER_NAME = "wifi_direct_last_peer_name"
     private const val KEY_WIFI_DIRECT_LAST_PEER_ADDRESS = "wifi_direct_last_peer_address"
+    private const val KEY_WIFI_DIRECT_CERT_MAP = "wifi_direct_cert_map"
 
 
     private fun prefs(ctx: Context) =
@@ -150,6 +152,64 @@ object Prefs {
     fun wifiDirectLastPeerAddress(ctx: Context): String =
         prefs(ctx).getString(KEY_WIFI_DIRECT_LAST_PEER_ADDRESS, "") ?: ""
 
+    /**
+     * Client certificate remembered for a Wi-Fi Direct peer. The P2P device
+     * address (MAC) is the primary key; the peer name is a fallback for drivers
+     * that rotate the address.
+     */
+    fun wifiDirectCertId(ctx: Context, address: String, name: String = ""): String? {
+        val raw = prefs(ctx).getString(KEY_WIFI_DIRECT_CERT_MAP, null) ?: return null
+        return try {
+            val obj = JSONObject(raw)
+            val direct = obj.optString(wifiDirectPeerKey(address, name), "")
+            if (direct.isNotBlank()) return direct
+            if (name.isNotBlank()) {
+                val byName = obj.optString("name:" + name.trim().lowercase(), "")
+                if (byName.isNotBlank()) return byName
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun setWifiDirectCertId(ctx: Context, address: String, name: String, certId: String?) {
+        val raw = prefs(ctx).getString(KEY_WIFI_DIRECT_CERT_MAP, null)
+        val obj = try {
+            if (raw.isNullOrBlank()) JSONObject() else JSONObject(raw)
+        } catch (_: Exception) {
+            JSONObject()
+        }
+        val keys = buildList {
+            if (address.trim().isNotBlank()) add("mac:" + address.trim().lowercase())
+            if (name.trim().isNotBlank()) add("name:" + name.trim().lowercase())
+        }
+        if (certId.isNullOrBlank()) {
+            keys.forEach { obj.remove(it) }
+        } else {
+            keys.forEach { obj.put(it, certId) }
+        }
+        prefs(ctx).edit().putString(KEY_WIFI_DIRECT_CERT_MAP, obj.toString()).apply()
+    }
+
+    /** Drop every peer binding that points at a deleted client certificate. */
+    fun removeWifiDirectCertMappings(ctx: Context, certId: String) {
+        val raw = prefs(ctx).getString(KEY_WIFI_DIRECT_CERT_MAP, null) ?: return
+        try {
+            val obj = JSONObject(raw)
+            val keys = obj.keys().asSequence().filter { obj.optString(it) == certId }.toList()
+            if (keys.isEmpty()) return
+            keys.forEach { obj.remove(it) }
+            prefs(ctx).edit().putString(KEY_WIFI_DIRECT_CERT_MAP, obj.toString()).apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun wifiDirectPeerKey(address: String, name: String): String {
+        val mac = address.trim().lowercase()
+        if (mac.isNotBlank()) return "mac:$mac"
+        return "name:" + name.trim().lowercase()
+    }
 
     fun whitelist(ctx: Context): List<WhitelistEntry> {
         val raw = prefs(ctx).getString(KEY_WHITELIST, null) ?: return emptyList()
